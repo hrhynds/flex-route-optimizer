@@ -437,6 +437,88 @@ button:active {
   text-align: center;
 }
 
+/* Photo strip */
+#photo-strip {
+  margin-top: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+#photo-thumbs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.photo-thumb {
+  position: relative;
+  width: 72px;
+  height: 72px;
+  border-radius: 8px;
+  overflow: hidden;
+  border: 1px solid #2a2d3a;
+  flex-shrink: 0;
+  background: #0f1117;
+}
+
+.photo-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.thumb-badge {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  background: rgba(74, 144, 226, 0.88);
+  color: #fff;
+  font-size: 0.65rem;
+  font-weight: 700;
+  text-align: center;
+  padding: 2px 4px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  line-height: 1.5;
+}
+
+/* Clear all button */
+.clear-btn {
+  align-self: flex-start;
+  background: transparent;
+  border: 1px solid #2a2d3a;
+  color: #666;
+  font-size: 0.8rem;
+  padding: 6px 14px;
+  font-weight: 500;
+}
+
+.clear-btn:hover {
+  background: rgba(224, 92, 92, 0.1);
+  border-color: #e05c5c;
+  color: #e05c5c;
+}
+
+/* Address count badge */
+#addr-count-row {
+  margin-bottom: 12px;
+}
+
+#addr-count {
+  display: inline-block;
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: #4caf87;
+  background: rgba(76, 175, 135, 0.1);
+  padding: 4px 12px;
+  border-radius: 20px;
+  border: 1px solid rgba(76, 175, 135, 0.3);
+}
+
 @media (max-width: 500px) {
   header h1 { font-size: 1.5rem; }
   .input-row { flex-direction: column; }
