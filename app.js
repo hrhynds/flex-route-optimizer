@@ -37,11 +37,37 @@ window.onGoogleMapsReady = function () {
   directionsRenderer = new google.maps.DirectionsRenderer({ suppressMarkers: false });
 };
 
+// ─── Image Normalization (MIME type fix) ─────────────────────────────────────
+// Draws the image onto a canvas and exports as PNG — guarantees correct MIME
+// type regardless of whether the file was JPEG mislabeled as PNG or vice versa.
+function normalizeImage(file) {
+  return new Promise((resolve) => {
+    const img = new Image();
+    const objectUrl = URL.createObjectURL(file);
+
+    img.onload = () => {
+      const canvas = document.createElement('canvas');
+      canvas.width  = img.naturalWidth;
+      canvas.height = img.naturalHeight;
+      canvas.getContext('2d').drawImage(img, 0, 0);
+      URL.revokeObjectURL(objectUrl);
+      canvas.toBlob((blob) => resolve(blob || file), 'image/png');
+    };
+
+    img.onerror = () => {
+      URL.revokeObjectURL(objectUrl);
+      resolve(file); // fall back to original if image can't be decoded
+    };
+
+    img.src = objectUrl;
+  });
+}
+
 // ─── File Handling ────────────────────────────────────────────────────────────
-function handleFile(file) {
+async function handleFile(file) {
   if (!file) return;
 
-  // Show preview
+  // Show preview immediately with original file
   const preview = document.getElementById('preview-img');
   preview.src = URL.createObjectURL(file);
   preview.style.display = 'block';
@@ -52,7 +78,9 @@ function handleFile(file) {
   document.getElementById('address-list').innerHTML = '';
   addresses = [];
 
-  runOCR(file);
+  // Normalize to PNG (fixes JPEG/PNG MIME type mismatches before OCR)
+  const normalizedFile = await normalizeImage(file);
+  runOCR(normalizedFile);
 }
 
 // Drag & drop support
