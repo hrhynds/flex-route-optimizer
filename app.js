@@ -343,12 +343,12 @@ function darkMapStyles() {
   ];
 }
 
-// ─── Init: load saved API key ─────────────────────────────────────────────────
+// ─── Init: auto-load hardcoded API key ───────────────────────────────────────
+const GMAPS_API_KEY = 'AIzaSyBjLabRdpEvNXzP1mAdme-RMEOxtbeyNzo';
+
 (function init() {
-  const saved = localStorage.getItem('gmaps_api_key');
-  if (saved) {
-    document.getElementById('api-key-input').value = saved;
-    setStatus(document.getElementById('key-status'), 'API key loaded from last session.', 'success');
-    loadGoogleMapsScript(saved);
-  }
+  // Hide the API key setup section — key is built in
+  document.getElementById('setup-section').style.display = 'none';
+  localStorage.setItem('gmaps_api_key', GMAPS_API_KEY);
+  loadGoogleMapsScript(GMAPS_API_KEY);
 })();
