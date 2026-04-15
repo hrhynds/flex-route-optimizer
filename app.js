@@ -3,18 +3,16 @@ let addresses = [];
 let optimizedOrder = [];
 let googleMapsLoaded = false;
 let map = null;
-let directionsService = null;
-let directionsRenderer = null;
+let markers = [];
 
-// ─── Google Maps Loading ──────────────────────────────────────────────────────
+// ─── Google Maps (display only — no Directions API needed) ───────────────────
 const GMAPS_API_KEY = 'AIzaSyBjLabRdpEvNXzP1mAdme-RMEOxtbeyNzo';
 
 function loadGoogleMapsScript(key) {
   if (document.getElementById('gmaps-script')) return;
   const script = document.createElement('script');
   script.id = 'gmaps-script';
-  // loading=async eliminates the synchronous-load performance warning
-  script.src = `https://maps.googleapis.com/maps/api/js?key=${key}&loading=async&libraries=geometry&callback=onGoogleMapsReady`;
+  script.src = `https://maps.googleapis.com/maps/api/js?key=${key}&loading=async&callback=onGoogleMapsReady`;
   script.async = true;
   script.defer = true;
   document.head.appendChild(script);
@@ -22,149 +20,111 @@ function loadGoogleMapsScript(key) {
 
 window.onGoogleMapsReady = function () {
   googleMapsLoaded = true;
-  directionsService  = new google.maps.DirectionsService();
-  directionsRenderer = new google.maps.DirectionsRenderer({ suppressMarkers: false });
 };
 
 // ─── Delivery Area ────────────────────────────────────────────────────────────
-// Saved in localStorage so the user only has to enter it once.
-// Appended to any address that lacks a US state abbreviation (e.g. "MI").
-
 function loadDeliveryArea() {
   const saved = localStorage.getItem('delivery_area') || '';
-  const el = document.getElementById('delivery-area');
-  if (el && saved) el.value = saved;
+  if (saved) document.getElementById('delivery-area').value = saved;
 }
 
 function onDeliveryAreaChange() {
-  const val = (document.getElementById('delivery-area').value || '').trim();
-  localStorage.setItem('delivery_area', val);
+  localStorage.setItem('delivery_area', (document.getElementById('delivery-area').value || '').trim());
 }
 
 function enrichAddress(addr) {
   const area = (document.getElementById('delivery-area').value || '').trim();
   if (!area) return addr;
-  // Already contains a 2-letter state abbreviation — leave it alone
-  if (/\b[A-Z]{2}\b/.test(addr)) return addr;
+  if (/\b[A-Z]{2}\b/.test(addr)) return addr; // already has state
   return addr + ', ' + area;
 }
 
 // ─── Image Normalization (MIME type fix) ─────────────────────────────────────
-// Draws the image onto a canvas and re-exports as PNG, guaranteeing the correct
-// MIME type regardless of whether the original was a mislabeled JPEG, WEBP, etc.
 function normalizeImage(file) {
   return new Promise((resolve) => {
     const img = new Image();
-    const objectUrl = URL.createObjectURL(file);
-
+    const url = URL.createObjectURL(file);
     img.onload = () => {
       const canvas = document.createElement('canvas');
       canvas.width  = img.naturalWidth;
       canvas.height = img.naturalHeight;
       canvas.getContext('2d').drawImage(img, 0, 0);
-      URL.revokeObjectURL(objectUrl);
-      canvas.toBlob((blob) => resolve(blob || file), 'image/png');
+      URL.revokeObjectURL(url);
+      canvas.toBlob(blob => resolve(blob || file), 'image/png');
     };
-
-    img.onerror = () => {
-      URL.revokeObjectURL(objectUrl);
-      resolve(file); // fall back to original
-    };
-
-    img.src = objectUrl;
+    img.onerror = () => { URL.revokeObjectURL(url); resolve(file); };
+    img.src = url;
   });
 }
 
 // ─── File Handling ────────────────────────────────────────────────────────────
 async function handleFile(file) {
   if (!file) return;
-
   const preview = document.getElementById('preview-img');
   preview.src = URL.createObjectURL(file);
   preview.style.display = 'block';
-
   document.getElementById('addresses-section').style.display = 'block';
   document.getElementById('ocr-progress').style.display = 'block';
   document.getElementById('address-list').innerHTML = '';
   addresses = [];
-
-  const normalizedFile = await normalizeImage(file);
-  runOCR(normalizedFile);
+  runOCR(await normalizeImage(file));
 }
 
-// Drag & drop
 const dropZone = document.getElementById('drop-zone');
-dropZone.addEventListener('dragover',  (e) => { e.preventDefault(); dropZone.classList.add('dragover'); });
+dropZone.addEventListener('dragover',  e => { e.preventDefault(); dropZone.classList.add('dragover'); });
 dropZone.addEventListener('dragleave', ()  => dropZone.classList.remove('dragover'));
-dropZone.addEventListener('drop', (e) => {
+dropZone.addEventListener('drop', e => {
   e.preventDefault();
   dropZone.classList.remove('dragover');
-  const file = e.dataTransfer.files[0];
-  if (file) handleFile(file);
+  const f = e.dataTransfer.files[0];
+  if (f) handleFile(f);
 });
 
 // ─── OCR ──────────────────────────────────────────────────────────────────────
 async function runOCR(imageBlob) {
-  const progressFill  = document.getElementById('progress-fill');
-  const progressLabel = document.getElementById('progress-label');
+  const fill  = document.getElementById('progress-fill');
+  const label = document.getElementById('progress-label');
   document.getElementById('ocr-progress').style.display = 'block';
-
   let worker;
   try {
-    progressLabel.textContent = 'Loading OCR engine…';
-    progressFill.style.width = '5%';
-
+    label.textContent = 'Loading OCR engine…';
+    fill.style.width = '5%';
     worker = await Tesseract.createWorker('eng', 1, {
       workerPath: 'https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/worker.min.js',
       langPath:   'https://tessdata.projectnaptha.com/4.0.0',
-      logger: (m) => {
+      logger: m => {
         if (m.status === 'recognizing text') {
           const pct = Math.round(m.progress * 100);
-          progressFill.style.width = Math.max(pct, 10) + '%';
-          progressLabel.textContent = `Reading screenshot… ${pct}%`;
+          fill.style.width = Math.max(pct, 10) + '%';
+          label.textContent = `Reading screenshot… ${pct}%`;
         } else if (m.status === 'loading tesseract core') {
-          progressFill.style.width = '20%';
-          progressLabel.textContent = 'Loading OCR engine…';
+          fill.style.width = '20%'; label.textContent = 'Loading OCR engine…';
         } else if (m.status === 'initializing tesseract') {
-          progressFill.style.width = '40%';
-          progressLabel.textContent = 'Initializing…';
+          fill.style.width = '40%'; label.textContent = 'Initializing…';
         } else if (m.status === 'loading language traineddata') {
-          progressFill.style.width = '60%';
-          progressLabel.textContent = 'Loading language data…';
+          fill.style.width = '60%'; label.textContent = 'Loading language data…';
         }
       },
     });
-
-    // PSM 4 = single column of variable-size text — best for Flex stop lists
     await worker.setParameters({ tessedit_pageseg_mode: '4' });
-
     const { data: { text } } = await worker.recognize(imageBlob);
-
-    progressFill.style.width = '100%';
-    progressLabel.textContent = 'Extracting addresses…';
-
+    fill.style.width = '100%';
+    label.textContent = 'Extracting addresses…';
     showRawOcrText(text);
-
-    const extracted = parseAddresses(text);
-    addresses = extracted;
+    addresses = parseAddresses(text);
     renderAddressList();
-
     document.getElementById('ocr-progress').style.display = 'none';
-
     if (addresses.length === 0) {
-      progressLabel.textContent = 'No addresses found — check the raw text below or add them manually.';
+      label.textContent = 'No addresses found — check raw text below or add manually.';
       document.getElementById('ocr-progress').style.display = 'block';
-    } else {
-      // Prompt for delivery area if addresses are missing state info
-      const missingState = addresses.some(a => !/\b[A-Z]{2}\b/.test(a));
-      if (missingState && !document.getElementById('delivery-area').value.trim()) {
-        document.getElementById('delivery-area').focus();
-      }
+    } else if (addresses.some(a => !/\b[A-Z]{2}\b/.test(a))) {
+      const el = document.getElementById('delivery-area');
+      if (!el.value.trim()) el.focus();
     }
   } catch (err) {
-    const msg = (err && err.message) ? err.message : String(err);
-    progressLabel.textContent = `OCR error: ${msg}. Add addresses manually below.`;
-    progressFill.style.width = '0%';
+    const msg = err?.message || String(err);
+    document.getElementById('progress-label').textContent = `OCR error: ${msg}. Add addresses manually.`;
+    fill.style.width = '0%';
     document.getElementById('ocr-progress').style.display = 'block';
     console.error('OCR error:', err);
   } finally {
@@ -177,93 +137,47 @@ function showRawOcrText(text) {
   if (!box) {
     box = document.createElement('div');
     box.id = 'raw-ocr-box';
-    box.innerHTML = `
-      <details style="margin-top:14px;">
-        <summary style="cursor:pointer;color:#555;font-size:0.8rem;">▶ Show raw OCR text (debug)</summary>
-        <textarea id="raw-ocr-text" readonly
-          style="width:100%;height:140px;margin-top:8px;background:#0a0c12;border:1px solid #2a2d3a;
-                 border-radius:8px;color:#888;font-size:0.78rem;padding:10px;resize:vertical;"></textarea>
-      </details>`;
-    document.getElementById('addresses-section').insertBefore(
-      box, document.getElementById('ocr-progress')
-    );
+    box.innerHTML = `<details style="margin-top:14px;"><summary style="cursor:pointer;color:#555;font-size:0.8rem;">▶ Show raw OCR text (debug)</summary>
+      <textarea id="raw-ocr-text" readonly style="width:100%;height:140px;margin-top:8px;background:#0a0c12;border:1px solid #2a2d3a;border-radius:8px;color:#888;font-size:0.78rem;padding:10px;resize:vertical;"></textarea></details>`;
+    document.getElementById('addresses-section').insertBefore(box, document.getElementById('ocr-progress'));
   }
   document.getElementById('raw-ocr-text').value = text;
 }
 
 // ─── Address Parsing ──────────────────────────────────────────────────────────
-// Tuned for Amazon Flex screenshot formats (stop lists, multi-line addresses).
 function parseAddresses(rawText) {
-  const cleaned = rawText
-    .replace(/\r\n/g, '\n')
-    .replace(/[|]/g, 'I')
-    .replace(/['']/g, "'")
-    .replace(/[""]/g, '"');
-
+  const cleaned = rawText.replace(/\r\n/g, '\n').replace(/[|]/g, 'I').replace(/['']/g, "'").replace(/[""]/g, '"');
   const lines = cleaned.split('\n').map(l => l.trim()).filter(l => l.length > 1);
   const found = [];
-
   const houseNumRe     = /^\d{1,5}\s+[A-Za-z]/;
   const aptRe          = /^(apt|unit|suite|ste|#|bldg|building|floor|fl|room|rm)\.?\s*\S/i;
   const cityStateZipRe = /^[A-Za-z][A-Za-z\s\-']{1,30},?\s+[A-Z]{2}\s+\d{5}(-\d{4})?$/;
-  const cityStateRe    = /^[A-Za-z][A-Za-z\s\-']{1,30},?\s+[A-Z]{2}$/;   // city + state, no ZIP
+  const cityStateRe    = /^[A-Za-z][A-Za-z\s\-']{1,30},?\s+[A-Z]{2}$/;
   const stateZipRe     = /\b[A-Z]{2}\s+\d{5}(-\d{4})?\b/;
   const oneLineRe      = /^\d{1,5}\s+.{5,},\s*[A-Za-z\s]+,?\s+[A-Z]{2}(\s+\d{5})?/;
   const streetKwRe     = /\b(st\.?|ave\.?|blvd\.?|dr\.?|rd\.?|way|ln\.?|ct\.?|pl\.?|pkwy|hwy|highway|route|rte|circle|cir|terr?\.?|trail|trl|loop|court|place|drive|street|avenue|boulevard|lane|road|run|row|ridge|park|point|pointe|bend|crossing|chase|grove|glen|hollow|hill|heights|vista|view|creek|bridge|gate|pass|path|pike|square|sq\.?|commons|village|manor|estates?|xing)\b/i;
-
   let i = 0;
   while (i < lines.length) {
     const line = lines[i];
-
-    // One-line full address
-    if (oneLineRe.test(line)) {
-      found.push(line);
-      i++;
-      continue;
-    }
-
-    // Multi-line address starting with a house number
+    if (oneLineRe.test(line)) { found.push(line); i++; continue; }
     if (houseNumRe.test(line)) {
       const parts = [line];
       let j = i + 1;
-
       while (j < lines.length && j < i + 5) {
         const next = lines[j];
-        if (aptRe.test(next)) {
-          parts.push(next);
-          j++;
-        } else if (cityStateZipRe.test(next) || cityStateRe.test(next) || stateZipRe.test(next)) {
-          parts.push(next);
-          j++;
-          break;
-        } else if (/^[A-Za-z][A-Za-z\s\-']{1,30}$/.test(next) && next.length < 35) {
-          // Likely a city-only line — absorb and keep scanning
-          parts.push(next);
-          j++;
-        } else {
-          break;
-        }
+        if (aptRe.test(next)) { parts.push(next); j++; }
+        else if (cityStateZipRe.test(next) || cityStateRe.test(next) || stateZipRe.test(next)) { parts.push(next); j++; break; }
+        else if (/^[A-Za-z][A-Za-z\s\-']{1,30}$/.test(next) && next.length < 35) { parts.push(next); j++; }
+        else break;
       }
-
       const candidate = parts.join(', ').replace(/,\s*,/g, ',').trim();
-      if (streetKwRe.test(candidate) || stateZipRe.test(candidate)) {
-        found.push(candidate);
-      }
-      i = j;
-      continue;
+      if (streetKwRe.test(candidate) || stateZipRe.test(candidate)) found.push(candidate);
+      i = j; continue;
     }
-
     i++;
   }
-
-  // De-duplicate (case-insensitive)
   const seen = new Set();
-  return found.filter(a => {
-    const key = a.toLowerCase().replace(/\s+/g, ' ');
-    if (seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  });
+  return found.filter(a => { const k = a.toLowerCase().replace(/\s+/g, ' '); if (seen.has(k)) return false; seen.add(k); return true; });
 }
 
 // ─── Address List UI ──────────────────────────────────────────────────────────
@@ -271,23 +185,22 @@ function renderAddressList() {
   const list = document.getElementById('address-list');
   list.innerHTML = '';
   addresses.forEach((addr, i) => {
-    const missingState = !/\b[A-Z]{2}\b/.test(addr);
+    const partial = !/\b[A-Z]{2}\b/.test(addr);
     const li = document.createElement('li');
-    li.className = missingState ? 'addr-partial' : '';
+    li.className = partial ? 'addr-partial' : '';
     li.innerHTML = `
       <span class="addr-num">${i + 1}</span>
-      <input type="text" value="${escHtml(addr)}" onchange="addresses[${i}] = this.value; this.parentElement.className = /\\b[A-Z]{2}\\b/.test(this.value) ? '' : 'addr-partial'" />
-      <button class="del-btn" onclick="deleteAddress(${i})" title="Remove">&#x2715;</button>
-    `;
+      <input type="text" value="${escHtml(addr)}" onchange="addresses[${i}]=this.value;this.parentElement.className=/\\b[A-Z]{2}\\b/.test(this.value)?'':'addr-partial'" />
+      <button class="del-btn" onclick="deleteAddress(${i})" title="Remove">&#x2715;</button>`;
     list.appendChild(li);
   });
 }
 
-function deleteAddress(index) {
-  syncAddressesFromDom();
-  addresses.splice(index, 1);
-  renderAddressList();
+function syncAddressesFromDom() {
+  addresses = Array.from(document.querySelectorAll('#address-list input[type=text]')).map(i => i.value.trim()).filter(Boolean);
 }
+
+function deleteAddress(i) { syncAddressesFromDom(); addresses.splice(i, 1); renderAddressList(); }
 
 function addAddressManually() {
   const input = document.getElementById('new-address-input');
@@ -299,141 +212,157 @@ function addAddressManually() {
   renderAddressList();
 }
 
-document.getElementById('new-address-input').addEventListener('keydown', (e) => {
-  if (e.key === 'Enter') addAddressManually();
-});
+document.getElementById('new-address-input').addEventListener('keydown', e => { if (e.key === 'Enter') addAddressManually(); });
 
-// Sync the in-memory array from whatever is currently in the DOM inputs
-// (handles cases where the user edited address fields directly)
-function syncAddressesFromDom() {
-  const inputs = document.querySelectorAll('#address-list input[type=text]');
-  addresses = Array.from(inputs).map(i => i.value.trim()).filter(Boolean);
+// ─── Geocoding (Nominatim — free, no billing required) ───────────────────────
+async function geocodeAddress(address) {
+  const url = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(address)}&format=json&limit=1&countrycodes=us`;
+  const res = await fetch(url, { headers: { 'User-Agent': 'FlexRouteOptimizer/1.0', 'Accept-Language': 'en-US,en' } });
+  if (!res.ok) throw new Error(`Geocode request failed (${res.status})`);
+  const data = await res.json();
+  if (!data.length) throw new Error(`Address not found: "${address}"`);
+  return { lat: parseFloat(data[0].lat), lng: parseFloat(data[0].lon) };
 }
 
-// ─── Route Optimization ───────────────────────────────────────────────────────
-function optimizeRoute() {
-  // Sync DOM edits into the addresses array before doing anything
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+// ─── Route Optimization (client-side TSP — no Google Directions API needed) ──
+function haversineDistance(a, b) {
+  const R = 3959, toRad = x => x * Math.PI / 180;
+  const dLat = toRad(b.lat - a.lat), dLng = toRad(b.lng - a.lng);
+  const h = Math.sin(dLat / 2) ** 2 + Math.cos(toRad(a.lat)) * Math.cos(toRad(b.lat)) * Math.sin(dLng / 2) ** 2;
+  return R * 2 * Math.asin(Math.sqrt(h));
+}
+
+function nearestNeighborTSP(points, startIdx = 0) {
+  const n = points.length;
+  const visited = new Array(n).fill(false);
+  const route = [startIdx];
+  visited[startIdx] = true;
+  for (let s = 0; s < n - 1; s++) {
+    const curr = route[route.length - 1];
+    let best = -1, bestDist = Infinity;
+    for (let j = 0; j < n; j++) {
+      if (!visited[j]) { const d = haversineDistance(points[curr], points[j]); if (d < bestDist) { bestDist = d; best = j; } }
+    }
+    visited[best] = true; route.push(best);
+  }
+  return route;
+}
+
+// ─── Main Optimize Button ─────────────────────────────────────────────────────
+async function optimizeRoute() {
   syncAddressesFromDom();
+  if (addresses.length < 2) { alert('Add at least 2 delivery addresses first.'); return; }
+  if (!googleMapsLoaded) { alert('Google Maps is still loading — wait a moment and try again.'); return; }
 
-  if (addresses.length < 2) {
-    alert('Add at least 2 delivery addresses first.');
-    return;
-  }
-
-  if (!googleMapsLoaded) {
-    alert('Google Maps is still loading — wait a second and try again.');
-    return;
-  }
-
-  // Save delivery area for next session
   onDeliveryAreaChange();
 
-  // Enrich addresses: append delivery area to any that lack a state code
-  const enriched = addresses.map(enrichAddress);
-
-  const startAddr = document.getElementById('start-address').value.trim();
-  // Save starting point for next session
-  if (startAddr) localStorage.setItem('start_address', startAddr);
-
-  const origin      = enrichAddress(startAddr) || enriched[0];
-  const destination = enriched[enriched.length - 1];
-  const waypointsForApi = startAddr
-    ? enriched.map(a => ({ location: a, stopover: true }))
-    : enriched.slice(1, -1).map(a => ({ location: a, stopover: true }));
-
-  const request = {
-    origin,
-    destination,
-    waypoints: waypointsForApi,
-    optimizeWaypoints: true,
-    travelMode: google.maps.TravelMode.DRIVING,
-  };
+  const enriched    = addresses.map(enrichAddress);
+  const startRaw    = document.getElementById('start-address').value.trim();
+  if (startRaw) localStorage.setItem('start_address', startRaw);
+  const startEnrich = startRaw ? enrichAddress(startRaw) : null;
+  const allAddrs    = startEnrich ? [startEnrich, ...enriched] : enriched;
 
   const btn = document.getElementById('optimize-btn');
-  btn.textContent = 'Optimizing…';
   btn.disabled = true;
 
-  directionsService.route(request, (result, status) => {
+  try {
+    // Geocode each address with Nominatim (rate limit: 1 req/sec)
+    const points = [];
+    for (let i = 0; i < allAddrs.length; i++) {
+      btn.textContent = `Geocoding ${i + 1} / ${allAddrs.length}…`;
+      try {
+        const pt = await geocodeAddress(allAddrs[i]);
+        points.push({ ...pt, address: allAddrs[i] });
+      } catch (err) {
+        alert(`Could not find: "${allAddrs[i]}"\n\nTry editing the address or making sure the Delivery Area is set correctly.`);
+        return;
+      }
+      if (i < allAddrs.length - 1) await sleep(1100); // respect Nominatim rate limit
+    }
+
+    btn.textContent = 'Optimizing…';
+
+    // Nearest-neighbor TSP starting from index 0 (warehouse or first stop)
+    const routeIndices = nearestNeighborTSP(points, 0);
+    const orderedPoints = routeIndices.map(i => points[i]);
+
+    optimizedOrder = orderedPoints.map(p => p.address);
+    showResultOnMap(orderedPoints);
+
+  } finally {
     btn.textContent = 'Optimize Route';
     btn.disabled = false;
-
-    if (status === google.maps.DirectionsStatus.OK) {
-      showResult(result, origin, destination, waypointsForApi, !!startAddr);
-    } else {
-      const hint = status === 'NOT_FOUND'
-        ? '\n\nOne or more addresses couldn\'t be found. Try adding your state to the Delivery Area field above.'
-        : '';
-      alert(`Route failed: ${status}${hint}`);
-      console.error('Directions API error:', status, result);
-    }
-  });
+  }
 }
 
 // ─── Result Display ───────────────────────────────────────────────────────────
-function showResult(result, origin, destination, waypointsForApi) {
+function showResultOnMap(orderedPoints) {
   document.getElementById('result-section').style.display = 'block';
   document.getElementById('result-section').scrollIntoView({ behavior: 'smooth' });
 
+  // Clear old markers
+  markers.forEach(m => m.setMap(null));
+  markers = [];
+
   if (!map) {
     map = new google.maps.Map(document.getElementById('map'), {
-      zoom: 12,
-      mapTypeId: 'roadmap',
-      styles: darkMapStyles(),
+      zoom: 12, mapTypeId: 'roadmap', styles: darkMapStyles(),
     });
-    directionsRenderer.setMap(map);
   }
-  directionsRenderer.setDirections(result);
 
-  const legs = result.routes[0].legs;
-  let totalMeters = 0, totalSeconds = 0;
-  legs.forEach(leg => { totalMeters += leg.distance.value; totalSeconds += leg.duration.value; });
+  const bounds = new google.maps.LatLngBounds();
 
-  const totalMiles = (totalMeters / 1609.34).toFixed(1);
-  const hours = Math.floor(totalSeconds / 3600);
-  const mins  = Math.round((totalSeconds % 3600) / 60);
-  const timeStr = hours > 0 ? `${hours}h ${mins}m` : `${mins}m`;
+  orderedPoints.forEach((pt, i) => {
+    const pos = { lat: pt.lat, lng: pt.lng };
+    bounds.extend(pos);
+    const marker = new google.maps.Marker({
+      position: pos, map,
+      label: { text: String(i + 1), color: '#fff', fontWeight: 'bold', fontSize: '13px' },
+      title: pt.address,
+    });
+    markers.push(marker);
+  });
 
-  const order = result.routes[0].waypoint_order;
-  const orderedAddresses = [origin];
-  order.forEach(i => orderedAddresses.push(waypointsForApi[i].location));
-  if (destination !== origin) orderedAddresses.push(destination);
+  // Draw route line
+  new google.maps.Polyline({
+    path: orderedPoints.map(p => ({ lat: p.lat, lng: p.lng })),
+    map, strokeColor: '#4a90e2', strokeWeight: 3, strokeOpacity: 0.75,
+  });
 
-  optimizedOrder = orderedAddresses;
+  map.fitBounds(bounds);
+
+  // Estimate total straight-line distance
+  let totalMiles = 0;
+  for (let i = 0; i < orderedPoints.length - 1; i++) totalMiles += haversineDistance(orderedPoints[i], orderedPoints[i + 1]);
 
   document.getElementById('route-summary').innerHTML = `
     <div class="stat-row">
-      <div class="stat"><span>Total Distance</span><span>${totalMiles} mi</span></div>
-      <div class="stat"><span>Est. Drive Time</span><span>${timeStr}</span></div>
-      <div class="stat"><span>Stops</span><span>${addresses.length}</span></div>
+      <div class="stat"><span>Est. Distance</span><span>${totalMiles.toFixed(1)} mi</span></div>
+      <div class="stat"><span>Stops</span><span>${orderedPoints.length - (optimizedOrder[0] === (document.getElementById('start-address').value.trim() ? enrichAddress(document.getElementById('start-address').value.trim()) : null) ? 1 : 0)}</span></div>
     </div>
     <div class="ordered-stops">
       <h3>Optimized Stop Order</h3>
-      <ol>${orderedAddresses.map(a => `<li>${escHtml(a)}</li>`).join('')}</ol>
+      <ol>${orderedPoints.map(p => `<li>${escHtml(p.address)}</li>`).join('')}</ol>
     </div>
+    <p class="result-note">Tap "Open in Google Maps" to navigate turn-by-turn on your phone.</p>
   `;
 }
 
 // ─── Open in Google Maps ──────────────────────────────────────────────────────
 function openInGoogleMaps() {
-  if (optimizedOrder.length < 2) {
-    alert('Optimize the route first.');
-    return;
-  }
-
+  if (optimizedOrder.length < 2) { alert('Optimize the route first.'); return; }
   const origin      = encodeURIComponent(optimizedOrder[0]);
   const destination = encodeURIComponent(optimizedOrder[optimizedOrder.length - 1]);
   const waypoints   = optimizedOrder.slice(1, -1).map(encodeURIComponent).join('|');
-
   let url = `https://www.google.com/maps/dir/?api=1&origin=${origin}&destination=${destination}&travelmode=driving`;
   if (waypoints) url += `&waypoints=${waypoints}`;
-
   window.open(url, '_blank');
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
-function escHtml(str) {
-  return str.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
-}
+function escHtml(s) { return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
 
 function darkMapStyles() {
   return [
@@ -454,8 +383,6 @@ function darkMapStyles() {
   localStorage.setItem('gmaps_api_key', GMAPS_API_KEY);
   loadGoogleMapsScript(GMAPS_API_KEY);
   loadDeliveryArea();
-
-  // Restore saved starting point
   const savedStart = localStorage.getItem('start_address');
   if (savedStart) document.getElementById('start-address').value = savedStart;
 })();
