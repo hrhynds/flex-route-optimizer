@@ -12,7 +12,7 @@ function loadGoogleMapsScript(key) {
   if (document.getElementById('gmaps-script')) return;
   const script = document.createElement('script');
   script.id = 'gmaps-script';
-  script.src = `https://maps.googleapis.com/maps/api/js?key=${key}&loading=async&callback=onGoogleMapsReady`;
+  script.src = `https://maps.googleapis.com/maps/api/js?key=${key}&loading=async&libraries=geocoding&callback=onGoogleMapsReady`;
   script.async = true;
   script.defer = true;
   document.head.appendChild(script);
@@ -214,37 +214,67 @@ function addAddressManually() {
 
 document.getElementById('new-address-input').addEventListener('keydown', e => { if (e.key === 'Enter') addAddressManually(); });
 
-// ─── Geocoding (Nominatim — free, no billing required) ───────────────────────
-// Tries multiple query strategies so industrial/warehouse addresses still resolve.
+// ─── Geocoding ────────────────────────────────────────────────────────────────
+// Primary: Google Maps Geocoder (handles partial addresses, auto-generates ZIP)
+// Fallback: Nominatim/OpenStreetMap (free, no billing needed)
+
 async function geocodeAddress(address) {
+  // Try Google Maps Geocoder first — most accurate, handles warehouse addresses
+  if (googleMapsLoaded && window.google && window.google.maps) {
+    try {
+      return await geocodeWithGoogle(address);
+    } catch (e) {
+      // Falls through to Nominatim if Google denies or fails
+      console.warn('Google geocode failed, trying Nominatim:', e.message);
+    }
+  }
+  // Fallback: Nominatim with multiple strategies
+  return await geocodeWithNominatim(address);
+}
+
+function geocodeWithGoogle(address) {
+  return new Promise((resolve, reject) => {
+    const geocoder = new google.maps.Geocoder();
+    geocoder.geocode({ address, region: 'us' }, (results, status) => {
+      if (status === 'OK' && results.length) {
+        const loc = results[0].geometry.location;
+        resolve({ lat: loc.lat(), lng: loc.lng(), resolvedAddress: results[0].formatted_address });
+      } else {
+        reject(new Error(status));
+      }
+    });
+  });
+}
+
+async function geocodeWithNominatim(address) {
   const headers = { 'User-Agent': 'FlexRouteOptimizer/1.0', 'Accept-Language': 'en-US,en' };
-  const nominatim = async (params) => {
+  const query = async (params) => {
     const qs = new URLSearchParams({ format: 'json', limit: '1', countrycodes: 'us', ...params }).toString();
     const res = await fetch(`https://nominatim.openstreetmap.org/search?${qs}`, { headers });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    return await res.json();
+    return res.json();
   };
 
   // Strategy 1: full unstructured query
-  let data = await nominatim({ q: address });
+  let data = await query({ q: address });
   if (data.length) return { lat: parseFloat(data[0].lat), lng: parseFloat(data[0].lon) };
 
-  // Strategy 2: structured query (better for addresses Nominatim knows by parts)
+  // Parse out parts for structured strategies
   const m = address.match(/^(\d+\s+[^,]+),\s*([^,]+),\s*([A-Z]{2})[\s,]*(\d{5})?/);
   if (m) {
+    // Strategy 2: structured (street + city + state)
     await sleep(1100);
-    data = await nominatim({ street: m[1].trim(), city: m[2].trim(), state: m[3].trim(), ...(m[4] ? { postalcode: m[4] } : {}) });
+    data = await query({ street: m[1].trim(), city: m[2].trim(), state: m[3].trim(), ...(m[4] ? { postalcode: m[4] } : {}) });
     if (data.length) return { lat: parseFloat(data[0].lat), lng: parseFloat(data[0].lon) };
 
-    // Strategy 3: drop the house number (finds the street in the right city)
+    // Strategy 3: street name only (no house number)
     await sleep(1100);
-    const streetNoNum = m[1].replace(/^\d+\s+/, '');
-    data = await nominatim({ street: streetNoNum, city: m[2].trim(), state: m[3].trim() });
+    data = await query({ street: m[1].replace(/^\d+\s+/, ''), city: m[2].trim(), state: m[3].trim() });
     if (data.length) return { lat: parseFloat(data[0].lat), lng: parseFloat(data[0].lon) };
 
-    // Strategy 4: just city + state (rough location, better than nothing)
+    // Strategy 4: city + state centre (good enough for start-point approximation)
     await sleep(1100);
-    data = await nominatim({ city: m[2].trim(), state: m[3].trim() });
+    data = await query({ city: m[2].trim(), state: m[3].trim() });
     if (data.length) return { lat: parseFloat(data[0].lat), lng: parseFloat(data[0].lon) };
   }
 
