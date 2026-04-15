@@ -228,11 +228,28 @@ function parseAddresses(rawText) {
   const cleaned = rawText
     .replace(/\r\n/g, '\n').replace(/[|]/g, 'I')
     .replace(/['']/g, "'").replace(/[""]/g, '"');
-  const lines = cleaned.split('\n').map(l => l.trim()).filter(l => l.length > 2);
-  const found = [];
+  const rawLines = cleaned.split('\n').map(l => l.trim()).filter(l => l.length > 2);
 
+  // ── Pre-process: skip Amazon Flex UI noise early ──────────────────────────
+  const noiseRe = /^(expected by\b|deliver\s+\d|#\s*[A-Z][-\d]|itinerary|route\s*#)/i;
+  const lines = rawLines.filter(l => !noiseRe.test(l));
+
+  // ── Pre-process: merge a bare house number with the next line when OCR
+  //    splits "15" and "S ELM GROVE RD" onto separate lines ─────────────────
+  const dirStreetRe = /^[NSEWnsew]\s+[A-Za-z]/;
+  const mergedLines = [];
+  for (let k = 0; k < lines.length; k++) {
+    if (/^\d{1,5}$/.test(lines[k]) && k + 1 < lines.length && dirStreetRe.test(lines[k + 1])) {
+      mergedLines.push(lines[k] + ' ' + lines[k + 1]);
+      k++;   // consumed the next line
+    } else {
+      mergedLines.push(lines[k]);
+    }
+  }
+
+  const found = [];
   const houseNumRe     = /^\d{1,5}\s+[A-Za-z]/;
-  const aptRe          = /^(apt|unit|suite|ste|#|bldg|building|floor|fl|room|rm)\.?\s*\S/i;
+  const aptRe          = /^(apt|unit|suite|ste|#\s*\d|bldg|building|floor|fl|room|rm)\.?\s*\S/i;
   const cityStateZipRe = /^[A-Za-z][A-Za-z\s\-']{1,30},?\s+[A-Z]{2}\s+\d{5}(-\d{4})?$/;
   const cityStateRe    = /^[A-Za-z][A-Za-z\s\-']{1,30},?\s+[A-Z]{2}$/;
   const stateZipRe     = /\b[A-Z]{2}\s+\d{5}(-\d{4})?\b/;
@@ -240,14 +257,15 @@ function parseAddresses(rawText) {
   const streetKwRe     = /\b(st\.?|ave\.?|blvd\.?|dr\.?|rd\.?|way|ln\.?|ct\.?|pl\.?|pkwy|hwy|highway|route|rte|circle|cir|terr?\.?|trail|trl|loop|court|place|drive|street|avenue|boulevard|lane|road|run|row|ridge|park|point|pointe|bend|crossing|chase|grove|glen|hollow|hill|heights|vista|view|creek|bridge|gate|pass|path|pike|square|sq\.?|commons|village|manor|estates?|xing)\b/i;
 
   let i = 0;
-  while (i < lines.length) {
-    const line = lines[i];
+  while (i < mergedLines.length) {
+    const line = mergedLines[i];
     if (oneLineRe.test(line)) { found.push(line); i++; continue; }
     if (houseNumRe.test(line)) {
       const parts = [line];
       let j = i + 1;
-      while (j < lines.length && j < i + 6) {
-        const next = lines[j];
+      while (j < mergedLines.length && j < i + 6) {
+        const next = mergedLines[j];
+        if (noiseRe.test(next)) break;
         if (aptRe.test(next)) { parts.push(next); j++; }
         else if (cityStateZipRe.test(next) || cityStateRe.test(next) || stateZipRe.test(next)) {
           parts.push(next); j++; break;
