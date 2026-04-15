@@ -95,40 +95,66 @@ dropZone.addEventListener('drop', (e) => {
 });
 
 // ─── OCR ──────────────────────────────────────────────────────────────────────
-async function runOCR(file) {
+async function runOCR(imageBlob) {
   const progressFill  = document.getElementById('progress-fill');
   const progressLabel = document.getElementById('progress-label');
+  document.getElementById('ocr-progress').style.display = 'block';
 
+  let worker;
   try {
-    const result = await Tesseract.recognize(file, 'eng', {
+    progressLabel.textContent = 'Loading OCR engine…';
+    progressFill.style.width = '5%';
+
+    worker = await Tesseract.createWorker('eng', 1, {
+      workerPath: 'https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/worker.min.js',
+      langPath:   'https://tessdata.projectnaptha.com/4.0.0',
+      corePath:   'https://cdn.jsdelivr.net/npm/tesseract.js-core@5/tesseract-core-simd-lstm.wasm.js',
       logger: (m) => {
         if (m.status === 'recognizing text') {
           const pct = Math.round(m.progress * 100);
-          progressFill.style.width = pct + '%';
+          progressFill.style.width = Math.max(pct, 10) + '%';
           progressLabel.textContent = `Reading screenshot… ${pct}%`;
+        } else if (m.status === 'loading tesseract core') {
+          progressFill.style.width = '20%';
+          progressLabel.textContent = 'Loading OCR engine…';
+        } else if (m.status === 'initializing tesseract') {
+          progressFill.style.width = '40%';
+          progressLabel.textContent = 'Initializing…';
+        } else if (m.status === 'loading language traineddata') {
+          progressFill.style.width = '60%';
+          progressLabel.textContent = 'Loading language data…';
         }
       },
-      tessedit_pageseg_mode: '6',  // Assume a single uniform block of text (good for lists)
     });
 
-    progressLabel.textContent = 'Done! Extracting addresses…';
+    // PSM 4 = single column of variable-size text — best for Flex stop lists
+    await worker.setParameters({ tessedit_pageseg_mode: '4' });
 
-    // Show raw OCR text so user can verify / debug
-    showRawOcrText(result.data.text);
+    const { data: { text } } = await worker.recognize(imageBlob);
 
-    const extracted = parseAddresses(result.data.text);
+    progressFill.style.width = '100%';
+    progressLabel.textContent = 'Extracting addresses…';
+
+    showRawOcrText(text);
+
+    const extracted = parseAddresses(text);
     addresses = extracted;
     renderAddressList();
 
     document.getElementById('ocr-progress').style.display = 'none';
 
     if (addresses.length === 0) {
-      progressLabel.textContent = 'No addresses found automatically — check the raw text below or add them manually.';
+      progressLabel.textContent = 'No addresses found — check the raw text below or add them manually.';
       document.getElementById('ocr-progress').style.display = 'block';
     }
   } catch (err) {
-    progressLabel.textContent = 'OCR failed. Add addresses manually below.';
+    const msg = (err && err.message) ? err.message : String(err);
+    progressLabel.textContent = `OCR error: ${msg}. Add addresses manually below.`;
+    progressFill.style.width = '0%';
+    document.getElementById('ocr-progress').style.display = 'block';
     console.error('OCR error:', err);
+  } finally {
+    if (worker) { try { await worker.terminate(); } catch (_) {} }
   }
 }
 
