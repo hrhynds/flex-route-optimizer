@@ -79,10 +79,15 @@ async function runOCR(file) {
           progressFill.style.width = pct + '%';
           progressLabel.textContent = `Reading screenshot… ${pct}%`;
         }
-      }
+      },
+      tessedit_pageseg_mode: '6',  // Assume a single uniform block of text (good for lists)
     });
 
     progressLabel.textContent = 'Done! Extracting addresses…';
+
+    // Show raw OCR text so user can verify / debug
+    showRawOcrText(result.data.text);
+
     const extracted = parseAddresses(result.data.text);
     addresses = extracted;
     renderAddressList();
@@ -90,7 +95,7 @@ async function runOCR(file) {
     document.getElementById('ocr-progress').style.display = 'none';
 
     if (addresses.length === 0) {
-      progressLabel.textContent = 'No addresses found automatically — add them manually below.';
+      progressLabel.textContent = 'No addresses found automatically — check the raw text below or add them manually.';
       document.getElementById('ocr-progress').style.display = 'block';
     }
   } catch (err) {
@@ -99,65 +104,105 @@ async function runOCR(file) {
   }
 }
 
-// ─── Address Parsing ──────────────────────────────────────────────────────────
-// Looks for lines that match common US address patterns
-function parseAddresses(rawText) {
-  const lines = rawText.split('\n').map(l => l.trim()).filter(Boolean);
-  const found = [];
-
-  // Pattern: starts with a number, has a street keyword
-  const streetPattern = /^\d+\s+.{3,}/;
-  const streetKeywords = /\b(st|ave|blvd|dr|rd|way|ln|ct|pl|pkwy|hwy|route|rte|circle|cir|terr?|trail|trl)\b/i;
-  // Pattern: ends with a state abbreviation + zip  e.g. "Seattle, WA 98101"
-  const stateZipPattern = /,?\s*[A-Z]{2}\s+\d{5}(-\d{4})?$/i;
-
-  let buffer = '';
-
-  for (const line of lines) {
-    // If line starts with a house number, start a new potential address
-    if (streetPattern.test(line)) {
-      if (buffer) {
-        const candidate = buffer.trim();
-        if (isLikelyAddress(candidate, streetKeywords, stateZipPattern)) {
-          found.push(candidate);
-        }
-      }
-      buffer = line;
-    } else if (buffer && (stateZipPattern.test(line) || /^[A-Za-z\s]+,?\s*[A-Z]{2}/.test(line))) {
-      // Continuation: city/state line
-      buffer += ', ' + line;
-      const candidate = buffer.trim();
-      if (isLikelyAddress(candidate, streetKeywords, stateZipPattern)) {
-        found.push(candidate);
-      }
-      buffer = '';
-    } else if (buffer && line.length < 50) {
-      buffer += ', ' + line;
-    } else {
-      if (buffer) {
-        const candidate = buffer.trim();
-        if (isLikelyAddress(candidate, streetKeywords, stateZipPattern)) {
-          found.push(candidate);
-        }
-        buffer = '';
-      }
-    }
+function showRawOcrText(text) {
+  let box = document.getElementById('raw-ocr-box');
+  if (!box) {
+    box = document.createElement('div');
+    box.id = 'raw-ocr-box';
+    box.innerHTML = `
+      <details style="margin-top:14px;">
+        <summary style="cursor:pointer;color:#666;font-size:0.8rem;">Show raw OCR text (for debugging)</summary>
+        <textarea id="raw-ocr-text" readonly
+          style="width:100%;height:140px;margin-top:8px;background:#0a0c12;border:1px solid #2a2d3a;
+                 border-radius:8px;color:#888;font-size:0.78rem;padding:10px;resize:vertical;"></textarea>
+      </details>`;
+    document.getElementById('addresses-section').insertBefore(
+      box, document.getElementById('ocr-progress')
+    );
   }
-
-  // Catch final buffer
-  if (buffer) {
-    const candidate = buffer.trim();
-    if (isLikelyAddress(candidate, streetKeywords, stateZipPattern)) {
-      found.push(candidate);
-    }
-  }
-
-  // De-duplicate
-  return [...new Set(found)];
+  document.getElementById('raw-ocr-text').value = text;
 }
 
-function isLikelyAddress(text, streetKeywords, stateZipPattern) {
-  return streetKeywords.test(text) || stateZipPattern.test(text);
+// ─── Address Parsing ──────────────────────────────────────────────────────────
+// Tuned for Amazon Flex screenshot formats (stop lists, multi-line addresses)
+function parseAddresses(rawText) {
+  // Fix common OCR artifacts
+  const cleaned = rawText
+    .replace(/\r\n/g, '\n')
+    .replace(/[|]/g, 'I')      // pipe mistaken for letter I
+    .replace(/['']/g, "'")
+    .replace(/[""]/g, '"');
+
+  const lines = cleaned.split('\n').map(l => l.trim()).filter(l => l.length > 1);
+  const found = [];
+
+  // A house number line: starts with 1–5 digits followed by a space and a letter
+  const houseNumRe   = /^\d{1,5}\s+[A-Za-z]/;
+  // Apartment / unit continuation lines
+  const aptRe        = /^(apt|unit|suite|ste|#|bldg|building|floor|fl|room|rm)\.?\s*\S/i;
+  // City + State + ZIP line  e.g. "Seattle, WA 98101" or "SEATTLE WA 98101-1234"
+  const cityStateZipRe = /^[A-Za-z][A-Za-z\s\-']{1,30},?\s+[A-Z]{2}\s+\d{5}(-\d{4})?$/;
+  // State + ZIP anywhere in line
+  const stateZipRe   = /\b[A-Z]{2}\s+\d{5}(-\d{4})?\b/;
+  // Full address on one line: house# + street + city/state/zip
+  const oneLineRe    = /^\d{1,5}\s+.{5,},\s*[A-Za-z\s]+,?\s+[A-Z]{2}\s+\d{5}/;
+  // Street keyword (broad list for US addresses)
+  const streetKwRe   = /\b(st\.?|ave\.?|blvd\.?|dr\.?|rd\.?|way|ln\.?|ct\.?|pl\.?|pkwy|hwy|highway|route|rte|circle|cir|terr?\.?|trail|trl|loop|court|place|drive|street|avenue|boulevard|lane|road|run|row|ridge|park|point|pointe|bend|crossing|chase|grove|glen|hollow|hill|heights|vista|view|creek|bridge|gate|pass|path|pike|square|sq\.?|commons|village|manor|estates?|xing)\b/i;
+
+  let i = 0;
+  while (i < lines.length) {
+    const line = lines[i];
+
+    // One-line full address (common in Amazon Flex list view)
+    if (oneLineRe.test(line)) {
+      found.push(line);
+      i++;
+      continue;
+    }
+
+    // Multi-line address starting with a house number
+    if (houseNumRe.test(line)) {
+      const parts = [line];
+      let j = i + 1;
+
+      while (j < lines.length && j < i + 5) {
+        const next = lines[j];
+        if (aptRe.test(next)) {
+          parts.push(next);
+          j++;
+        } else if (cityStateZipRe.test(next) || stateZipRe.test(next)) {
+          parts.push(next);
+          j++;
+          break;
+        } else if (/^[A-Za-z][A-Za-z\s\-']{1,30}$/.test(next) && next.length < 35) {
+          // Likely a city-only line — absorb and keep looking
+          parts.push(next);
+          j++;
+        } else {
+          break;
+        }
+      }
+
+      const candidate = parts.join(', ').replace(/,\s*,/g, ',').trim();
+      // Accept if it has a street keyword OR a state+zip
+      if (streetKwRe.test(candidate) || stateZipRe.test(candidate)) {
+        found.push(candidate);
+      }
+      i = j;
+      continue;
+    }
+
+    i++;
+  }
+
+  // De-duplicate (case-insensitive, collapse extra spaces)
+  const seen = new Set();
+  return found.filter(a => {
+    const key = a.toLowerCase().replace(/\s+/g, ' ');
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }
 
 // ─── Address List UI ──────────────────────────────────────────────────────────
