@@ -8,62 +8,78 @@
 </head>
 <body>
   <div id="app">
-    <!-- Header -->
     <header>
       <h1>Flex Route Optimizer</h1>
-      <p class="subtitle">Upload your Amazon Flex screenshot &rarr; Get the most efficient route</p>
+      <p class="subtitle">Upload your Amazon Flex screenshots &rarr; Get the most efficient route</p>
     </header>
 
-    <!-- Step 1: API Key Setup -->
-    <section class="card" id="setup-section">
+    <!-- Step 1: API Key (hidden — key is built in) -->
+    <section class="card" id="setup-section" style="display:none">
       <h2><span class="step">1</span> Google Maps API Key</h2>
-      <p>Needed for route optimization and map display. <a href="https://developers.google.com/maps/documentation/javascript/get-api-key" target="_blank">Get a free key here</a> (requires a Google account).</p>
       <div class="input-row">
         <input type="text" id="api-key-input" placeholder="Paste your Google Maps API key..." />
-        <button id="save-key-btn" onclick="saveApiKey()">Save Key</button>
+        <button onclick="saveApiKey()">Save Key</button>
       </div>
       <p id="key-status" class="status-msg"></p>
     </section>
 
     <!-- Step 2: Screenshot Upload -->
     <section class="card" id="upload-section">
-      <h2><span class="step">2</span> Upload Flex Screenshot</h2>
+      <h2><span class="step">2</span> Upload Flex Screenshots</h2>
       <div id="drop-zone" onclick="document.getElementById('file-input').click()">
         <div class="drop-inner">
-          <svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="#4a90e2" stroke-width="1.5"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
-          <p>Click or drag & drop your screenshot here</p>
-          <p class="hint">PNG, JPG, or WEBP supported</p>
+          <svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="#4a90e2" stroke-width="1.5">
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+            <polyline points="17 8 12 3 7 8"/>
+            <line x1="12" y1="3" x2="12" y2="15"/>
+          </svg>
+          <p>Click or drag &amp; drop screenshots here</p>
+          <p class="hint">Select up to 15 at once &bull; PNG, JPG or WEBP</p>
         </div>
       </div>
-      <input type="file" id="file-input" accept="image/*" style="display:none" onchange="handleFile(this.files[0])" />
-      <img id="preview-img" style="display:none" alt="Screenshot preview" />
+      <input type="file" id="file-input" accept="image/*" multiple style="display:none"
+             onchange="handleFiles(this.files)" />
+
+      <!-- Photo strip — thumbnails of processed screenshots -->
+      <div id="photo-strip" style="display:none">
+        <div id="photo-thumbs"></div>
+        <button class="clear-btn" onclick="clearAll()">&#x2715; Clear all</button>
+      </div>
     </section>
 
     <!-- Step 3: OCR + Address Review -->
     <section class="card" id="addresses-section" style="display:none">
       <h2><span class="step">3</span> Review Extracted Addresses</h2>
-      <p>Edit or delete any addresses that weren't read correctly. You can also add addresses manually.</p>
+      <p>Edit or delete anything OCR got wrong. Add missed addresses manually.</p>
 
-      <!-- Delivery area — appended to addresses that are missing a state -->
       <div class="field-row">
         <label for="delivery-area">Delivery state / area</label>
-        <input type="text" id="delivery-area" placeholder="e.g. MI  or  Lapeer, MI" oninput="onDeliveryAreaChange()" autocomplete="off" />
-        <p class="field-hint">Enter your state once — it's auto-added to any address missing location info so Google Maps can find it</p>
+        <input type="text" id="delivery-area" placeholder="e.g.  MI  or  Lapeer, MI"
+               oninput="onDeliveryAreaChange()" autocomplete="off" />
+        <p class="field-hint">Enter once — auto-appended to any address missing a state so Google Maps can find it</p>
       </div>
 
       <div id="ocr-progress" style="display:none">
         <div class="progress-bar"><div id="progress-fill"></div></div>
-        <p id="progress-label">Reading screenshot...</p>
+        <p id="progress-label">Reading screenshot…</p>
       </div>
+
+      <div id="addr-count-row" style="display:none">
+        <span id="addr-count"></span>
+      </div>
+
       <ul id="address-list"></ul>
+
       <div class="add-address-row">
-        <input type="text" id="new-address-input" placeholder="Add an address manually..." />
+        <input type="text" id="new-address-input" placeholder="Add an address manually…" />
         <button onclick="addAddressManually()">+ Add</button>
       </div>
+
       <div class="starting-point-row">
         <label for="start-address">Starting point (warehouse / your location):</label>
         <input type="text" id="start-address" placeholder="e.g. 28415 Automation Blvd, Wixom, MI" />
       </div>
+
       <button id="optimize-btn" onclick="optimizeRoute()">Optimize Route</button>
     </section>
 
@@ -76,7 +92,6 @@
     </section>
   </div>
 
-  <!-- Tesseract OCR (free, runs in browser) -->
   <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
   <script src="app.js"></script>
 </body>
