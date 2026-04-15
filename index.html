@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Flex Route Optimizer</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div id="app">
+    <!-- Header -->
+    <header>
+      <h1>Flex Route Optimizer</h1>
+      <p class="subtitle">Upload your Amazon Flex screenshot &rarr; Get the most efficient route</p>
+    </header>
+
+    <!-- Step 1: API Key Setup -->
+    <section class="card" id="setup-section">
+      <h2><span class="step">1</span> Google Maps API Key</h2>
+      <p>Needed for route optimization and map display. <a href="https://developers.google.com/maps/documentation/javascript/get-api-key" target="_blank">Get a free key here</a> (requires a Google account).</p>
+      <div class="input-row">
+        <input type="text" id="api-key-input" placeholder="Paste your Google Maps API key..." />
+        <button id="save-key-btn" onclick="saveApiKey()">Save Key</button>
+      </div>
+      <p id="key-status" class="status-msg"></p>
+    </section>
+
+    <!-- Step 2: Screenshot Upload -->
+    <section class="card" id="upload-section">
+      <h2><span class="step">2</span> Upload Flex Screenshot</h2>
+      <div id="drop-zone" onclick="document.getElementById('file-input').click()">
+        <div class="drop-inner">
+          <svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="#4a90e2" stroke-width="1.5"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+          <p>Click or drag & drop your screenshot here</p>
+          <p class="hint">PNG, JPG, or WEBP supported</p>
+        </div>
+      </div>
+      <input type="file" id="file-input" accept="image/*" style="display:none" onchange="handleFile(this.files[0])" />
+      <img id="preview-img" style="display:none" alt="Screenshot preview" />
+    </section>
+
+    <!-- Step 3: OCR + Address Review -->
+    <section class="card" id="addresses-section" style="display:none">
+      <h2><span class="step">3</span> Review Extracted Addresses</h2>
+      <p>Edit or delete any addresses that weren't read correctly. You can also add addresses manually.</p>
+      <div id="ocr-progress" style="display:none">
+        <div class="progress-bar"><div id="progress-fill"></div></div>
+        <p id="progress-label">Reading screenshot...</p>
+      </div>
+      <ul id="address-list"></ul>
+      <div class="add-address-row">
+        <input type="text" id="new-address-input" placeholder="Add an address manually..." />
+        <button onclick="addAddressManually()">+ Add</button>
+      </div>
+      <div class="starting-point-row">
+        <label for="start-address">Starting point (your location or warehouse):</label>
+        <input type="text" id="start-address" placeholder="e.g. 123 Main St, Seattle WA" />
+      </div>
+      <button id="optimize-btn" onclick="optimizeRoute()">Optimize Route</button>
+    </section>
+
+    <!-- Step 4: Result -->
+    <section class="card" id="result-section" style="display:none">
+      <h2><span class="step">4</span> Optimized Route</h2>
+      <div id="route-summary"></div>
+      <div id="map"></div>
+      <button id="open-maps-btn" onclick="openInGoogleMaps()">Open in Google Maps</button>
+    </section>
+  </div>
+
+  <!-- Tesseract OCR (free, runs in browser) -->
+  <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
