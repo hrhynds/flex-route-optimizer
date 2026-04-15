@@ -43,6 +43,14 @@
     <section class="card" id="addresses-section" style="display:none">
       <h2><span class="step">3</span> Review Extracted Addresses</h2>
       <p>Edit or delete any addresses that weren't read correctly. You can also add addresses manually.</p>
+
+      <!-- Delivery area — appended to addresses that are missing a state -->
+      <div class="field-row">
+        <label for="delivery-area">Delivery state / area</label>
+        <input type="text" id="delivery-area" placeholder="e.g. MI  or  Lapeer, MI" oninput="onDeliveryAreaChange()" autocomplete="off" />
+        <p class="field-hint">Enter your state once — it's auto-added to any address missing location info so Google Maps can find it</p>
+      </div>
+
       <div id="ocr-progress" style="display:none">
         <div class="progress-bar"><div id="progress-fill"></div></div>
         <p id="progress-label">Reading screenshot...</p>
@@ -53,8 +61,8 @@
         <button onclick="addAddressManually()">+ Add</button>
       </div>
       <div class="starting-point-row">
-        <label for="start-address">Starting point (your location or warehouse):</label>
-        <input type="text" id="start-address" placeholder="e.g. 123 Main St, Seattle WA" />
+        <label for="start-address">Starting point (warehouse / your location):</label>
+        <input type="text" id="start-address" placeholder="e.g. 28415 Automation Blvd, Wixom, MI" />
       </div>
       <button id="optimize-btn" onclick="optimizeRoute()">Optimize Route</button>
     </section>

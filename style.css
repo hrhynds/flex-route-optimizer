@@ -266,6 +266,54 @@ button:active {
   border-color: #4a90e2;
 }
 
+/* Delivery area / field rows */
+.field-row {
+  margin-bottom: 16px;
+  padding: 14px 16px;
+  background: rgba(74, 144, 226, 0.06);
+  border: 1px solid rgba(74, 144, 226, 0.25);
+  border-radius: 10px;
+}
+
+.field-row label {
+  display: block;
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: #4a90e2;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 8px;
+}
+
+.field-row input {
+  width: 100%;
+  padding: 10px 14px;
+  border-radius: 8px;
+  border: 1px solid #2a2d3a;
+  background: #0f1117;
+  color: #e0e0e0;
+  font-size: 0.95rem;
+  outline: none;
+  transition: border-color 0.2s;
+}
+
+.field-row input:focus {
+  border-color: #4a90e2;
+}
+
+.field-hint {
+  margin: 8px 0 0 !important;
+  font-size: 0.78rem !important;
+  color: #555 !important;
+  line-height: 1.4 !important;
+}
+
+/* Addresses missing state get a subtle amber tint */
+#address-list li.addr-partial {
+  border-color: #7a5c1a;
+  background: rgba(245, 166, 35, 0.05);
+}
+
 /* Starting point */
 .starting-point-row {
   margin-bottom: 16px;
