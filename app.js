@@ -215,13 +215,40 @@ function addAddressManually() {
 document.getElementById('new-address-input').addEventListener('keydown', e => { if (e.key === 'Enter') addAddressManually(); });
 
 // ─── Geocoding (Nominatim — free, no billing required) ───────────────────────
+// Tries multiple query strategies so industrial/warehouse addresses still resolve.
 async function geocodeAddress(address) {
-  const url = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(address)}&format=json&limit=1&countrycodes=us`;
-  const res = await fetch(url, { headers: { 'User-Agent': 'FlexRouteOptimizer/1.0', 'Accept-Language': 'en-US,en' } });
-  if (!res.ok) throw new Error(`Geocode request failed (${res.status})`);
-  const data = await res.json();
-  if (!data.length) throw new Error(`Address not found: "${address}"`);
-  return { lat: parseFloat(data[0].lat), lng: parseFloat(data[0].lon) };
+  const headers = { 'User-Agent': 'FlexRouteOptimizer/1.0', 'Accept-Language': 'en-US,en' };
+  const nominatim = async (params) => {
+    const qs = new URLSearchParams({ format: 'json', limit: '1', countrycodes: 'us', ...params }).toString();
+    const res = await fetch(`https://nominatim.openstreetmap.org/search?${qs}`, { headers });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return await res.json();
+  };
+
+  // Strategy 1: full unstructured query
+  let data = await nominatim({ q: address });
+  if (data.length) return { lat: parseFloat(data[0].lat), lng: parseFloat(data[0].lon) };
+
+  // Strategy 2: structured query (better for addresses Nominatim knows by parts)
+  const m = address.match(/^(\d+\s+[^,]+),\s*([^,]+),\s*([A-Z]{2})[\s,]*(\d{5})?/);
+  if (m) {
+    await sleep(1100);
+    data = await nominatim({ street: m[1].trim(), city: m[2].trim(), state: m[3].trim(), ...(m[4] ? { postalcode: m[4] } : {}) });
+    if (data.length) return { lat: parseFloat(data[0].lat), lng: parseFloat(data[0].lon) };
+
+    // Strategy 3: drop the house number (finds the street in the right city)
+    await sleep(1100);
+    const streetNoNum = m[1].replace(/^\d+\s+/, '');
+    data = await nominatim({ street: streetNoNum, city: m[2].trim(), state: m[3].trim() });
+    if (data.length) return { lat: parseFloat(data[0].lat), lng: parseFloat(data[0].lon) };
+
+    // Strategy 4: just city + state (rough location, better than nothing)
+    await sleep(1100);
+    data = await nominatim({ city: m[2].trim(), state: m[3].trim() });
+    if (data.length) return { lat: parseFloat(data[0].lat), lng: parseFloat(data[0].lon) };
+  }
+
+  throw new Error(`Address not found: "${address}"`);
 }
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
@@ -270,16 +297,47 @@ async function optimizeRoute() {
   try {
     // Geocode each address with Nominatim (rate limit: 1 req/sec)
     const points = [];
+    const failed = [];
+    let startPointFailed = false;
+
     for (let i = 0; i < allAddrs.length; i++) {
       btn.textContent = `Geocoding ${i + 1} / ${allAddrs.length}…`;
       try {
         const pt = await geocodeAddress(allAddrs[i]);
         points.push({ ...pt, address: allAddrs[i] });
       } catch (err) {
-        alert(`Could not find: "${allAddrs[i]}"\n\nTry editing the address or making sure the Delivery Area is set correctly.`);
-        return;
+        const isStart = i === 0 && startEnrich !== null;
+        if (isStart) {
+          startPointFailed = true;
+          // Skip start point — still optimize delivery stops
+        } else {
+          failed.push(allAddrs[i]);
+        }
       }
-      if (i < allAddrs.length - 1) await sleep(1100); // respect Nominatim rate limit
+      if (i < allAddrs.length - 1) await sleep(1100);
+    }
+
+    if (startPointFailed) {
+      const msg = `Starting point "${startEnrich}" couldn't be found on OpenStreetMap — it's been skipped. Optimizing delivery stops only.`;
+      console.warn(msg);
+      // Show a non-blocking notice (not an alert that stops flow)
+      const notice = document.getElementById('geocode-notice') || (() => {
+        const el = document.createElement('p');
+        el.id = 'geocode-notice';
+        el.style.cssText = 'color:#e0913a;font-size:0.82rem;margin-top:8px;';
+        document.getElementById('optimize-btn').insertAdjacentElement('afterend', el);
+        return el;
+      })();
+      notice.textContent = `⚠ Starting point not found on map — optimized delivery stops only.`;
+    }
+
+    if (failed.length) {
+      alert(`These addresses couldn't be found and were skipped:\n\n${failed.join('\n')}\n\nEdit them or check your Delivery Area setting.`);
+    }
+
+    if (points.length < 2) {
+      alert('Not enough addresses could be geocoded. Check your addresses and Delivery Area.');
+      return;
     }
 
     btn.textContent = 'Optimizing…';
