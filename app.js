@@ -230,8 +230,25 @@ function parseAddresses(rawText) {
     .replace(/['']/g, "'").replace(/[""]/g, '"');
   const rawLines = cleaned.split('\n').map(l => l.trim()).filter(l => l.length > 2);
 
-  // ── Pre-process: skip Amazon Flex UI noise early ──────────────────────────
-  const noiseRe = /^(expected by\b|deliver\s+\d|#\s*[A-Z][-\d]|itinerary|route\s*#)/i;
+  // ── Strip every line that can't be part of a street address ─────────────
+  // Anything matching ANY of these patterns is thrown away before parsing.
+  const noiseRe = new RegExp([
+    /^expected\s+by\b/,             // "Expected by 8:00 AM"
+    /^deliver\b/,                   // "Deliver 1 package / item"
+    /\bpackages?\b/,                // lines containing "package"
+    /\bitems?\b/,                   // lines containing "item"
+    /^#\s*[A-Za-z][-–—\d]/,        // "# M-23.3A"  route codes
+    /^itinerary\b/,                 // "Itinerary List"
+    /^route\s*#/,                   // "Route #..."
+    /\d{1,2}:\d{2}/,               // any time string  "8:00", "3:31"
+    /^(AM|PM)$/i,                   // lone AM / PM
+    /^\d{1,3}%$/,                   // battery %
+    /^(5G|LTE|4G|3G|WiFi|WIFI)$/i, // network indicators
+    /^(loading|searching)\b/i,      // loading states
+    /^\W+$/,                        // lines of only symbols / punctuation
+    /^[A-Z]{1,3}\d{1,3}$/,         // short alphanumeric codes e.g. "M23"
+  ].map(r => r.source).join('|'), 'i');
+
   const lines = rawLines.filter(l => !noiseRe.test(l));
 
   // ── Pre-process: merge a bare house number with the next line when OCR
