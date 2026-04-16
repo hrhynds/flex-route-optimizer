@@ -13,6 +13,8 @@ let gpsWatchId      = null;
 let locationMarker  = null;
 let dirRenderers    = [];   // DirectionsRenderer instances (one per batch)
 let fallbackPoly    = null; // straight-line fallback while real roads load
+let mapFollowsGps = true;   // map pans to GPS position while navigating
+let allNavSteps   = [];     // flattened step instructions from Directions API
 
 // Address verification cache  key = normalizeKey(addr) → { ok, lat, lng }
 let addrVerified = new Map();
@@ -24,7 +26,7 @@ function loadGoogleMapsScript(key) {
   if (document.getElementById('gmaps-script')) return;
   const s = document.createElement('script');
   s.id  = 'gmaps-script';
-  s.src = `https://maps.googleapis.com/maps/api/js?key=${key}&loading=async&libraries=geocoding&callback=onGoogleMapsReady`;
+  s.src = `https://maps.googleapis.com/maps/api/js?key=${key}&loading=async&libraries=geocoding,routes&callback=onGoogleMapsReady`;
   s.async = true; s.defer = true;
   document.head.appendChild(s);
 }
@@ -218,6 +220,8 @@ function clearAll() {
   orderedStops = [];
   navCurrentStop = 0;
   addrVerified.clear();
+  allNavSteps = [];
+  _stepIdx    = 0;
   document.getElementById('address-list').innerHTML = '';
   document.getElementById('photo-thumbs').innerHTML = '';
   document.getElementById('photo-strip').style.display = 'none';
@@ -558,6 +562,9 @@ function showGeoNotice(msg) {
 function showResultOnMap(ordered) {
   orderedStops   = ordered;
   navCurrentStop = 0;
+  allNavSteps  = [];
+  _stepIdx     = 0;
+  mapFollowsGps = true;
 
   document.getElementById('result-section').style.display = 'block';
   document.getElementById('result-section').scrollIntoView({ behavior: 'smooth' });
@@ -636,8 +643,17 @@ async function drawRealRoads(ordered) {
       const result = await requestDirections(batches[b]);
       if (!result) continue;
 
-      // Accumulate actual drive time
-      result.routes[0].legs.forEach(leg => { totalDriveMin += leg.duration.value / 60; });
+      // Accumulate actual drive time + extract turn-by-turn steps
+      result.routes[0].legs.forEach(leg => {
+        totalDriveMin += leg.duration.value / 60;
+        leg.steps.forEach(step => {
+          allNavSteps.push({
+            instruction: step.instructions.replace(/<[^>]+>/g, ''),
+            lat: step.start_location.lat(),
+            lng: step.start_location.lng(),
+          });
+        });
+      });
 
       const renderer = new google.maps.DirectionsRenderer({
         map,
@@ -691,12 +707,14 @@ function startGpsTracking() {
   gpsWatchId = navigator.geolocation.watchPosition(pos => {
     const { latitude: lat, longitude: lng } = pos.coords;
     const latlng = { lat, lng };
+
+    // Update or create GPS dot
     if (!locationMarker) {
       locationMarker = new google.maps.Marker({
         position: latlng, map,
         icon: {
           path: google.maps.SymbolPath.CIRCLE,
-          scale: 9, fillColor: '#4a90e2', fillOpacity: 1,
+          scale: 10, fillColor: '#4a90e2', fillOpacity: 1,
           strokeColor: '#fff', strokeWeight: 3,
         },
         title: 'Your location', zIndex: 999,
@@ -704,20 +722,65 @@ function startGpsTracking() {
     } else {
       locationMarker.setPosition(latlng);
     }
+
+    // Pan map to follow GPS
+    if (mapFollowsGps && map) map.panTo(latlng);
+
     // Update distance to current stop
     if (navCurrentStop < orderedStops.length) {
       const miles = haversineDistance(latlng, orderedStops[navCurrentStop]);
-      const el = document.getElementById('nav-stop-dist');
-      if (el) el.textContent = miles < 0.1
+      const distEl = document.getElementById('nav-stop-dist');
+      if (distEl) distEl.textContent = miles < 0.1
         ? `${Math.round(miles * 5280)} ft away`
         : `${miles.toFixed(1)} mi away`;
+
+      // Auto-arrive when within 80 ft
+      if (miles * 5280 < 80) autoArrive();
     }
+
+    // Show next turn instruction
+    updateTurnInstruction(latlng);
+
   }, err => console.warn('GPS:', err.message),
-  { enableHighAccuracy: true, maximumAge: 5000, timeout: 15000 });
+  { enableHighAccuracy: true, maximumAge: 3000, timeout: 15000 });
 }
 
 function stopGpsTracking() {
   if (gpsWatchId !== null) { navigator.geolocation.clearWatch(gpsWatchId); gpsWatchId = null; }
+}
+
+let _lastAutoArrive = 0;
+function autoArrive() {
+  const now = Date.now();
+  if (now - _lastAutoArrive < 30000) return; // cooldown 30s
+  _lastAutoArrive = now;
+  markDelivered();
+}
+
+function toggleGpsLock() {
+  mapFollowsGps = !mapFollowsGps;
+  const btn = document.getElementById('gps-lock-btn');
+  if (btn) btn.classList.toggle('gps-unlocked', !mapFollowsGps);
+  if (mapFollowsGps && locationMarker && map) map.panTo(locationMarker.getPosition());
+}
+
+// Show the closest upcoming turn instruction
+let _stepIdx = 0;
+function updateTurnInstruction(latlng) {
+  if (!allNavSteps.length) return;
+  // Find nearest step ahead
+  let best = _stepIdx, bestDist = Infinity;
+  const searchFrom = Math.max(0, _stepIdx - 1);
+  const searchTo   = Math.min(allNavSteps.length - 1, _stepIdx + 10);
+  for (let i = searchFrom; i <= searchTo; i++) {
+    const d = haversineDistance(latlng, allNavSteps[i]);
+    if (d < bestDist) { bestDist = d; best = i; }
+  }
+  // Advance past steps we've already passed (within 150 ft)
+  if (bestDist * 5280 < 150 && best < allNavSteps.length - 1) best++;
+  _stepIdx = best;
+  const el = document.getElementById('nav-turn');
+  if (el && allNavSteps[_stepIdx]) el.textContent = allNavSteps[_stepIdx].instruction;
 }
 
 // ─── Navigation Panel ─────────────────────────────────────────────────────────

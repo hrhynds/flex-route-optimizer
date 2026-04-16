@@ -5,6 +5,11 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Flex Route Optimizer</title>
   <link rel="stylesheet" href="style.css" />
+  <meta name="theme-color" content="#0f1117" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="FlexRoute" />
+  <link rel="manifest" href="manifest.json" />
 </head>
 <body>
   <div id="app">
@@ -91,6 +96,7 @@
 
       <!-- Navigation panel -->
       <div id="nav-panel" style="display:none">
+        <div id="nav-turn"></div>
         <div class="nav-info">
           <div class="nav-header">
             <span id="nav-stop-num"></span>
@@ -101,6 +107,7 @@
         <div class="nav-btns">
           <button class="nav-delivered-btn" onclick="markDelivered()">✓ Delivered</button>
           <button class="nav-open-btn" onclick="openCurrentStop()">Open in Maps →</button>
+          <button class="gps-lock-btn" id="gps-lock-btn" onclick="toggleGpsLock()" title="Toggle GPS follow">🎯</button>
         </div>
       </div>
 
@@ -110,5 +117,10 @@
 
   <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
   <script src="app.js"></script>
+  <script>
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.register('sw.js').catch(() => {});
+    }
+  </script>
 </body>
 </html>
