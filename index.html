@@ -87,8 +87,23 @@
     <section class="card" id="result-section" style="display:none">
       <h2><span class="step">4</span> Optimized Route</h2>
       <div id="route-summary"></div>
+
+      <!-- Navigation panel -->
+      <div id="nav-panel" style="display:none">
+        <div class="nav-info">
+          <div class="nav-header">
+            <span id="nav-stop-num"></span>
+            <span id="nav-stop-dist"></span>
+          </div>
+          <div id="nav-stop-addr"></div>
+        </div>
+        <div class="nav-btns">
+          <button class="nav-delivered-btn" onclick="markDelivered()">✓ Delivered</button>
+          <button class="nav-open-btn" onclick="openCurrentStop()">Open in Maps →</button>
+        </div>
+      </div>
+
       <div id="map"></div>
-      <button id="open-maps-btn" onclick="openInGoogleMaps()">Open in Google Maps</button>
     </section>
   </div>
 

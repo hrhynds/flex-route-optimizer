@@ -1,10 +1,18 @@
 // ─── State ────────────────────────────────────────────────────────────────────
-let addresses   = [];
+let addresses      = [];
 let optimizedOrder = [];
 let googleMapsLoaded = false;
-let map    = null;
-let markers = [];
-let ocrWorker = null;   // reused across all screenshots — init once, fast for all
+let map            = null;
+let markers        = [];
+let ocrWorker      = null;
+
+// Navigation state
+let orderedStops    = [];   // { lat, lng, address } in optimized order
+let navCurrentStop  = 0;
+let gpsWatchId      = null;
+let locationMarker  = null;
+let dirRenderers    = [];   // DirectionsRenderer instances (one per batch)
+let fallbackPoly    = null; // straight-line fallback while real roads load
 
 // ─── Google Maps ──────────────────────────────────────────────────────────────
 const GMAPS_API_KEY = 'AIzaSyBjLabRdpEvNXzP1mAdme-RMEOxtbeyNzo';
@@ -202,6 +210,8 @@ function updateAddrCount() {
 function clearAll() {
   addresses = [];
   optimizedOrder = [];
+  orderedStops = [];
+  navCurrentStop = 0;
   document.getElementById('address-list').innerHTML = '';
   document.getElementById('photo-thumbs').innerHTML = '';
   document.getElementById('photo-strip').style.display = 'none';
@@ -211,6 +221,11 @@ function clearAll() {
   document.getElementById('file-input').value = '';
   markers.forEach(m => m.setMap && m.setMap(null));
   markers = [];
+  dirRenderers.forEach(r => r.setMap(null));
+  dirRenderers = [];
+  if (fallbackPoly)    { fallbackPoly.setMap(null);    fallbackPoly   = null; }
+  if (locationMarker)  { locationMarker.setMap(null);  locationMarker = null; }
+  stopGpsTracking();
 }
 
 // Drag & drop — supports multiple files
@@ -461,11 +476,18 @@ function showGeoNotice(msg) {
 
 // ─── Result Display ───────────────────────────────────────────────────────────
 function showResultOnMap(ordered) {
+  orderedStops   = ordered;
+  navCurrentStop = 0;
+
   document.getElementById('result-section').style.display = 'block';
   document.getElementById('result-section').scrollIntoView({ behavior: 'smooth' });
 
-  markers.forEach(m => m.setMap && m.setMap(null));
-  markers = [];
+  // Clear old map state
+  markers.forEach(m => m.setMap && m.setMap(null));  markers = [];
+  dirRenderers.forEach(r => r.setMap(null));          dirRenderers = [];
+  if (fallbackPoly)   { fallbackPoly.setMap(null);   fallbackPoly   = null; }
+  if (locationMarker) { locationMarker.setMap(null); locationMarker = null; }
+  stopGpsTracking();
 
   if (!map) {
     map = new google.maps.Map(document.getElementById('map'), {
@@ -473,51 +495,192 @@ function showResultOnMap(ordered) {
     });
   }
 
+  // Numbered markers
   const bounds = new google.maps.LatLngBounds();
   ordered.forEach((pt, i) => {
     const pos = { lat: pt.lat, lng: pt.lng };
     bounds.extend(pos);
-    const m = new google.maps.Marker({
+    markers.push(new google.maps.Marker({
       position: pos, map,
-      label: { text: String(i + 1), color: '#fff', fontWeight: 'bold', fontSize: '13px' },
+      label: { text: String(i + 1), color: '#fff', fontWeight: 'bold', fontSize: '12px' },
       title: pt.address,
-    });
-    markers.push(m);
+    }));
   });
-
-  new google.maps.Polyline({
-    path: ordered.map(p => ({ lat: p.lat, lng: p.lng })),
-    map, strokeColor: '#4a90e2', strokeWeight: 3, strokeOpacity: 0.75,
-  });
-
   map.fitBounds(bounds);
 
+  // Dashed fallback polyline — replaced by real roads once they load
+  fallbackPoly = new google.maps.Polyline({
+    path: ordered.map(p => ({ lat: p.lat, lng: p.lng })),
+    map, strokeColor: '#4a90e2', strokeWeight: 2, strokeOpacity: 0.35,
+  });
+
+  // Distance estimate
   let totalMiles = 0;
-  for (let i = 0; i < ordered.length - 1; i++) totalMiles += haversineDistance(ordered[i], ordered[i+1]);
+  for (let i = 0; i < ordered.length - 1; i++) totalMiles += haversineDistance(ordered[i], ordered[i + 1]);
 
   document.getElementById('route-summary').innerHTML = `
     <div class="stat-row">
-      <div class="stat"><span>Est. Distance</span><span>${totalMiles.toFixed(1)} mi</span></div>
       <div class="stat"><span>Stops</span><span>${ordered.length}</span></div>
+      <div class="stat"><span>Est. Distance</span><span id="route-miles">${totalMiles.toFixed(1)} mi</span></div>
+      <div class="stat"><span>Roads</span><span id="route-road-status">Loading…</span></div>
     </div>
     <div class="ordered-stops">
-      <h3>Optimized Stop Order</h3>
+      <h3>Stop Order</h3>
       <ol>${ordered.map(p => `<li>${escHtml(p.address)}</li>`).join('')}</ol>
-    </div>
-    <p class="result-note">Tap "Open in Google Maps" to navigate turn-by-turn on your phone.</p>
-  `;
+    </div>`;
+
+  // Nav panel
+  updateNavPanel();
+  document.getElementById('nav-panel').style.display = 'block';
+
+  // Start GPS dot
+  startGpsTracking();
+
+  // Load real road paths in background
+  drawRealRoads(ordered);
 }
 
-// ─── Open in Google Maps ──────────────────────────────────────────────────────
-function openInGoogleMaps() {
-  if (optimizedOrder.length < 2) { alert('Optimize the route first.'); return; }
-  const enc = s => encodeURIComponent(s);
-  const origin      = enc(optimizedOrder[0]);
-  const destination = enc(optimizedOrder[optimizedOrder.length - 1]);
-  const waypoints   = optimizedOrder.slice(1, -1).map(enc).join('|');
-  let url = `https://www.google.com/maps/dir/?api=1&origin=${origin}&destination=${destination}&travelmode=driving`;
-  if (waypoints) url += `&waypoints=${waypoints}`;
-  window.open(url, '_blank');
+// ─── Real Road Directions (batched, 25 stops max per request) ─────────────────
+async function drawRealRoads(ordered) {
+  const BATCH = 25;
+  const batches = [];
+  for (let i = 0; i < ordered.length; i += BATCH - 1) {
+    const slice = ordered.slice(i, i + BATCH);
+    if (slice.length >= 2) batches.push(slice);
+  }
+
+  let totalDriveMin = 0, loadedBatches = 0;
+
+  for (let b = 0; b < batches.length; b++) {
+    try {
+      const result = await requestDirections(batches[b]);
+      if (!result) continue;
+
+      // Accumulate actual drive time
+      result.routes[0].legs.forEach(leg => { totalDriveMin += leg.duration.value / 60; });
+
+      const renderer = new google.maps.DirectionsRenderer({
+        map,
+        suppressMarkers: true,
+        suppressInfoWindows: true,
+        preserveViewport: true,
+        polylineOptions: { strokeColor: '#4a90e2', strokeWeight: 4, strokeOpacity: 0.9 },
+      });
+      renderer.setDirections(result);
+      dirRenderers.push(renderer);
+      loadedBatches++;
+    } catch (e) {
+      console.warn('Directions batch', b, 'failed — keeping fallback line:', e.message);
+    }
+    if (b < batches.length - 1) await sleep(250);
+  }
+
+  // Once all batches done, remove the dashed fallback and update status
+  if (loadedBatches === batches.length && fallbackPoly) {
+    fallbackPoly.setMap(null);
+    fallbackPoly = null;
+  }
+
+  const statusEl = document.getElementById('route-road-status');
+  if (statusEl) {
+    statusEl.textContent = loadedBatches === batches.length
+      ? `${Math.round(totalDriveMin)} min`
+      : 'Partial';
+  }
+}
+
+function requestDirections(pts) {
+  return new Promise((resolve, reject) => {
+    new google.maps.DirectionsService().route({
+      origin:      { lat: pts[0].lat,            lng: pts[0].lng },
+      destination: { lat: pts[pts.length-1].lat, lng: pts[pts.length-1].lng },
+      waypoints:   pts.slice(1, -1).map(p => ({ location: { lat: p.lat, lng: p.lng }, stopover: true })),
+      travelMode:  google.maps.TravelMode.DRIVING,
+      optimizeWaypoints: false,
+    }, (result, status) => {
+      if (status === 'OK') resolve(result);
+      else reject(new Error(status));
+    });
+  });
+}
+
+// ─── GPS Tracking ─────────────────────────────────────────────────────────────
+function startGpsTracking() {
+  if (!('geolocation' in navigator)) return;
+  stopGpsTracking();
+  gpsWatchId = navigator.geolocation.watchPosition(pos => {
+    const { latitude: lat, longitude: lng } = pos.coords;
+    const latlng = { lat, lng };
+    if (!locationMarker) {
+      locationMarker = new google.maps.Marker({
+        position: latlng, map,
+        icon: {
+          path: google.maps.SymbolPath.CIRCLE,
+          scale: 9, fillColor: '#4a90e2', fillOpacity: 1,
+          strokeColor: '#fff', strokeWeight: 3,
+        },
+        title: 'Your location', zIndex: 999,
+      });
+    } else {
+      locationMarker.setPosition(latlng);
+    }
+    // Update distance to current stop
+    if (navCurrentStop < orderedStops.length) {
+      const miles = haversineDistance(latlng, orderedStops[navCurrentStop]);
+      const el = document.getElementById('nav-stop-dist');
+      if (el) el.textContent = miles < 0.1
+        ? `${Math.round(miles * 5280)} ft away`
+        : `${miles.toFixed(1)} mi away`;
+    }
+  }, err => console.warn('GPS:', err.message),
+  { enableHighAccuracy: true, maximumAge: 5000, timeout: 15000 });
+}
+
+function stopGpsTracking() {
+  if (gpsWatchId !== null) { navigator.geolocation.clearWatch(gpsWatchId); gpsWatchId = null; }
+}
+
+// ─── Navigation Panel ─────────────────────────────────────────────────────────
+function updateNavPanel() {
+  const panel = document.getElementById('nav-panel');
+  if (!panel) return;
+
+  if (navCurrentStop >= orderedStops.length) {
+    panel.innerHTML = '<div class="nav-complete">🎉 All stops delivered!</div>';
+    return;
+  }
+
+  const stop  = orderedStops[navCurrentStop];
+  const num   = navCurrentStop + 1;
+  const total = orderedStops.length;
+
+  document.getElementById('nav-stop-num').textContent  = `Stop ${num} of ${total}`;
+  document.getElementById('nav-stop-addr').textContent = stop.address;
+  document.getElementById('nav-stop-dist').textContent = '';
+
+  // Pan map to current stop
+  if (map) map.panTo({ lat: stop.lat, lng: stop.lng });
+}
+
+function markDelivered() {
+  // Grey out the completed marker
+  const m = markers[navCurrentStop];
+  if (m) {
+    m.setIcon({
+      path: google.maps.SymbolPath.CIRCLE,
+      scale: 7, fillColor: '#444', fillOpacity: 0.7,
+      strokeColor: '#666', strokeWeight: 1.5,
+    });
+    m.setLabel({ text: '✓', color: '#888', fontSize: '10px', fontWeight: 'bold' });
+  }
+  navCurrentStop++;
+  updateNavPanel();
+}
+
+function openCurrentStop() {
+  if (navCurrentStop >= orderedStops.length) return;
+  const addr = encodeURIComponent(orderedStops[navCurrentStop].address);
+  window.open(`https://www.google.com/maps/dir/?api=1&destination=${addr}&travelmode=driving`, '_blank');
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
