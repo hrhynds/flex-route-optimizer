@@ -565,9 +565,27 @@ button:active {
   color: #e05c5c;
 }
 
-/* Address count badge */
+/* Address count badge + add-more button */
 #addr-count-row {
   margin-bottom: 12px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.add-more-btn {
+  background: transparent;
+  border: 1px solid #4a90e2;
+  color: #4a90e2;
+  font-size: 0.8rem;
+  padding: 4px 12px;
+  border-radius: 20px;
+  font-weight: 600;
+}
+
+.add-more-btn:hover {
+  background: rgba(74, 144, 226, 0.12);
 }
 
 #addr-count {

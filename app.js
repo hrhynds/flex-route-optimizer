@@ -243,7 +243,9 @@ function parseAddresses(rawText) {
   const cleaned = rawText
     .replace(/\r\n/g, '\n').replace(/[|]/g, 'I')
     .replace(/['']/g, "'").replace(/[""]/g, '"');
-  const rawLines = cleaned.split('\n').map(l => l.trim()).filter(l => l.length > 2);
+  // Keep lines longer than 2 chars OR pure-digit lines (short house numbers like "15", "5")
+  const rawLines = cleaned.split('\n').map(l => l.trim())
+    .filter(l => l.length > 2 || /^\d{1,5}$/.test(l));
 
   // ── Strip every line that can't be part of a street address ─────────────
   // Anything matching ANY of these patterns is thrown away before parsing.
