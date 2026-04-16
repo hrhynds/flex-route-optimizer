@@ -14,6 +14,9 @@ let locationMarker  = null;
 let dirRenderers    = [];   // DirectionsRenderer instances (one per batch)
 let fallbackPoly    = null; // straight-line fallback while real roads load
 
+// Address verification cache  key = normalizeKey(addr) → { ok, lat, lng }
+let addrVerified = new Map();
+
 // ─── Google Maps ──────────────────────────────────────────────────────────────
 const GMAPS_API_KEY = 'AIzaSyBjLabRdpEvNXzP1mAdme-RMEOxtbeyNzo';
 
@@ -170,6 +173,8 @@ async function handleFiles(files) {
       const el = document.getElementById('delivery-area');
       if (!el.value.trim()) el.focus();
     }
+    // Verify all addresses in background — shows green/red badges as they resolve
+    verifyAllAddresses();
   }
 }
 
@@ -212,6 +217,7 @@ function clearAll() {
   optimizedOrder = [];
   orderedStops = [];
   navCurrentStop = 0;
+  addrVerified.clear();
   document.getElementById('address-list').innerHTML = '';
   document.getElementById('photo-thumbs').innerHTML = '';
   document.getElementById('photo-strip').style.display = 'none';
@@ -323,30 +329,81 @@ function renderAddressList() {
   const list = document.getElementById('address-list');
   list.innerHTML = '';
   addresses.forEach((addr, i) => {
-    const partial = !/\b[A-Z]{2}\b/.test(addr);
+    const partial  = !/\b[A-Z]{2}\b/.test(addr);
+    const vStatus  = addrVerified.get(normalizeKey(addr));
+    const statusCls = !vStatus             ? 'vstatus-pending'
+                    : vStatus.ok           ? 'vstatus-ok'
+                    :                        'vstatus-fail';
+    const statusTip = !vStatus  ? 'Not verified yet'
+                    : vStatus.ok ? 'Found on Google Maps ✓'
+                    :              'Could not find on Google Maps';
+    const mapsUrl  = `https://www.google.com/maps/search/${encodeURIComponent(enrichAddress(addr))}`;
     const li = document.createElement('li');
     li.className = partial ? 'addr-partial' : '';
     li.innerHTML = `
       <span class="addr-num">${i + 1}</span>
+      <span class="addr-vstatus ${statusCls}" title="${statusTip}"></span>
       <input type="text" value="${escHtml(addr)}"
-             onchange="addresses[${i}]=this.value;this.parentElement.className=/\\b[A-Z]{2}\\b/.test(this.value)?'':'addr-partial'" />
+             onchange="onAddrEdit(${i}, this)" />
+      ${vStatus && !vStatus.ok
+        ? `<a class="maps-fix-btn" href="${mapsUrl}" target="_blank" title="Search Google Maps to fix this address">Search Maps</a>`
+        : `<a class="maps-view-btn" href="${mapsUrl}" target="_blank" title="View on Google Maps">📍</a>`}
       <button class="del-btn" onclick="deleteAddress(${i})" title="Remove">&#x2715;</button>`;
     list.appendChild(li);
   });
   updateAddrCount();
 }
 
+function onAddrEdit(i, input) {
+  const newVal = input.value;
+  addresses[i] = newVal;
+  addrVerified.delete(normalizeKey(newVal)); // clear cache so it re-verifies
+  input.parentElement.className = /\b[A-Z]{2}\b/.test(newVal) ? '' : 'addr-partial';
+  // Re-verify this address in background
+  verifyAddress(newVal).then(() => renderAddressList());
+}
+
 function syncAddressesFromDom() {
   addresses = Array.from(document.querySelectorAll('#address-list input[type=text]'))
     .map(el => el.value.trim()).filter(Boolean);
 }
-function deleteAddress(i)    { syncAddressesFromDom(); addresses.splice(i, 1); renderAddressList(); }
+function deleteAddress(i) {
+  syncAddressesFromDom();
+  addrVerified.delete(normalizeKey(addresses[i]));
+  addresses.splice(i, 1);
+  renderAddressList();
+}
 function addAddressManually() {
   const inp = document.getElementById('new-address-input');
   const val = inp.value.trim(); if (!val) return;
-  syncAddressesFromDom(); addresses.push(val); inp.value = ''; renderAddressList();
+  syncAddressesFromDom(); addresses.push(val); inp.value = '';
+  renderAddressList();
+  verifyAddress(val).then(() => renderAddressList());
 }
 document.getElementById('new-address-input').addEventListener('keydown', e => { if (e.key === 'Enter') addAddressManually(); });
+
+// ─── Background Address Verification ─────────────────────────────────────────
+async function verifyAddress(addr) {
+  const key = normalizeKey(addr);
+  if (addrVerified.has(key)) return;  // already cached
+  const enriched = enrichAddress(addr);
+  try {
+    const pt = await geocodeAddress(enriched);
+    addrVerified.set(key, { ok: true, lat: pt.lat, lng: pt.lng });
+  } catch {
+    addrVerified.set(key, { ok: false });
+  }
+}
+
+async function verifyAllAddresses() {
+  // Verify addresses in the background, re-rendering after each one
+  const toCheck = addresses.filter(a => !addrVerified.has(normalizeKey(a)));
+  for (const addr of toCheck) {
+    await verifyAddress(addr);
+    renderAddressList();
+    await sleep(120); // gentle rate-limit
+  }
+}
 
 // ─── Geocoding ────────────────────────────────────────────────────────────────
 async function geocodeAddress(address) {
@@ -438,19 +495,40 @@ async function optimizeRoute() {
     let startSkipped = false;
 
     for (let i = 0; i < allAddrs.length; i++) {
+      const key    = normalizeKey(allAddrs[i]);
+      const cached = addrVerified.get(key);
+
+      // Use cached result if already verified
+      if (cached && cached.ok) {
+        points.push({ lat: cached.lat, lng: cached.lng, address: allAddrs[i] });
+        btn.textContent = `Geocoding ${i + 1} / ${allAddrs.length}…`;
+        continue;
+      }
+      if (cached && !cached.ok) {
+        // Already known bad — skip without re-trying
+        if (i === 0 && startEnr) startSkipped = true;
+        else failed.push(allAddrs[i]);
+        continue;
+      }
+
       btn.textContent = `Geocoding ${i + 1} / ${allAddrs.length}…`;
       try {
         const pt = await geocodeAddress(allAddrs[i]);
+        addrVerified.set(key, { ok: true, lat: pt.lat, lng: pt.lng });
         points.push({ ...pt, address: allAddrs[i] });
       } catch {
+        addrVerified.set(key, { ok: false });
         if (i === 0 && startEnr) { startSkipped = true; }
         else { failed.push(allAddrs[i]); }
       }
-      if (i < allAddrs.length - 1 && !googleMapsLoaded) await sleep(1100);
     }
 
     if (startSkipped) showGeoNotice('⚠ Starting point not found — optimized delivery stops only.');
-    if (failed.length) alert(`Skipped (couldn't geocode):\n\n${failed.join('\n')}\n\nCheck the Delivery Area field or edit those addresses.`);
+    if (failed.length) {
+      // Re-render list so red badges are visible, then show notice (no blocking alert)
+      renderAddressList();
+      showGeoNotice(`⚠ ${failed.length} address${failed.length > 1 ? 'es' : ''} couldn't be found — marked red above. Fix them and re-optimize.`);
+    }
     if (points.length < 2) { alert('Not enough addresses could be located. Check your addresses.'); return; }
 
     btn.textContent = 'Optimizing…';

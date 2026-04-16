@@ -220,6 +220,48 @@ button:active {
   text-align: right;
 }
 
+/* Verification status dot */
+.addr-vstatus {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.vstatus-pending { background: #444; }
+.vstatus-ok      { background: #4caf87; }
+.vstatus-fail    { background: #e05c5c; }
+
+/* Failed address row highlight */
+#address-list li:has(.vstatus-fail) {
+  border-color: #6a2a2a;
+  background: rgba(224, 92, 92, 0.05);
+}
+
+/* Maps buttons */
+.maps-view-btn,
+.maps-fix-btn {
+  flex-shrink: 0;
+  font-size: 0.75rem;
+  font-weight: 600;
+  border-radius: 6px;
+  padding: 3px 8px;
+  text-decoration: none;
+  white-space: nowrap;
+}
+.maps-view-btn {
+  color: #555;
+  background: transparent;
+}
+.maps-view-btn:hover { color: #4a90e2; }
+.maps-fix-btn {
+  color: #e05c5c;
+  background: rgba(224, 92, 92, 0.12);
+  border: 1px solid rgba(224, 92, 92, 0.3);
+}
+.maps-fix-btn:hover {
+  background: rgba(224, 92, 92, 0.22);
+}
+
 #address-list li input {
   flex: 1;
   background: transparent;
