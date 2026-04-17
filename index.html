@@ -13,6 +13,22 @@
 </head>
 <body>
   <div id="app">
+
+    <!-- Session restore banner — shown on reload if a route was in progress -->
+    <div id="session-banner" style="display:none">
+      <div class="session-banner-inner">
+        <span class="session-icon">🔄</span>
+        <div class="session-info">
+          <strong>Resume your route?</strong>
+          <span id="session-detail"></span>
+        </div>
+        <div class="session-actions">
+          <button class="session-resume-btn" onclick="restoreSession()">Resume</button>
+          <button class="session-discard-btn" onclick="discardSession()">Discard</button>
+        </div>
+      </div>
+    </div>
+
     <header>
       <h1>Flex Route Optimizer</h1>
       <p class="subtitle">Upload your Amazon Flex screenshots &rarr; Get the most efficient route</p>

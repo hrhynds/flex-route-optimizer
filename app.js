@@ -19,6 +19,116 @@ let allNavSteps   = [];     // flattened step instructions from Directions API
 // Address verification cache  key = normalizeKey(addr) → { ok, lat, lng }
 let addrVerified = new Map();
 
+// Indices of stops that have been marked delivered
+let deliveredSet = new Set();
+
+// ─── Session Persistence ──────────────────────────────────────────────────────
+let _saveTimer = null;
+function scheduleSave() {
+  clearTimeout(_saveTimer);
+  _saveTimer = setTimeout(saveSession, 600);
+}
+
+function saveSession() {
+  if (!addresses.length && !orderedStops.length) return;
+  try {
+    localStorage.setItem('flex_session', JSON.stringify({
+      savedAt:         Date.now(),
+      addresses,
+      orderedStops,
+      navCurrentStop,
+      deliveredIndices: [...deliveredSet],
+      addrVerifiedArr:  [...addrVerified.entries()],
+    }));
+  } catch(e) { /* storage full — ignore */ }
+}
+
+function clearSession() {
+  localStorage.removeItem('flex_session');
+}
+
+function discardSession() {
+  clearSession();
+  const banner = document.getElementById('session-banner');
+  if (banner) banner.style.display = 'none';
+}
+
+function checkSavedSession() {
+  try {
+    const raw = localStorage.getItem('flex_session');
+    if (!raw) return;
+    const data = JSON.parse(raw);
+    if (!data.orderedStops?.length && !data.addresses?.length) return;
+    // Expire sessions older than 18 hours
+    if (Date.now() - (data.savedAt || 0) > 18 * 3600 * 1000) { clearSession(); return; }
+    const banner = document.getElementById('session-banner');
+    if (!banner) return;
+    const age  = Date.now() - (data.savedAt || 0);
+    const mins = Math.floor(age / 60000);
+    const ageStr = mins < 60
+      ? `${mins}m ago`
+      : `${Math.floor(mins / 60)}h ${mins % 60}m ago`;
+    const stopInfo = data.orderedStops?.length
+      ? `${data.orderedStops.length} stops · on stop ${(data.navCurrentStop || 0) + 1} · saved ${ageStr}`
+      : `${data.addresses?.length || 0} addresses · saved ${ageStr}`;
+    document.getElementById('session-detail').textContent = stopInfo;
+    banner.style.display = 'block';
+  } catch(e) { /* corrupt data — ignore */ }
+}
+
+async function restoreSession() {
+  try {
+    const raw = localStorage.getItem('flex_session');
+    if (!raw) return;
+    const data = JSON.parse(raw);
+    const banner = document.getElementById('session-banner');
+    if (banner) banner.style.display = 'none';
+
+    // Restore state
+    addrVerified  = new Map(data.addrVerifiedArr || []);
+    addresses     = data.addresses || [];
+
+    if (addresses.length) {
+      document.getElementById('addresses-section').style.display = 'block';
+      renderAddressList();
+      updateAddrCount();
+    }
+
+    if (data.orderedStops?.length) {
+      orderedStops = data.orderedStops;
+      // Wait up to 10s for Google Maps
+      const deadline = Date.now() + 10000;
+      while (!googleMapsLoaded && Date.now() < deadline) await sleep(200);
+      if (!googleMapsLoaded) { alert('Google Maps did not load. Try refreshing.'); return; }
+
+      // Render map (resets navCurrentStop → 0)
+      showResultOnMap([...orderedStops]);
+
+      // Re-apply delivered markers
+      const savedDelivered = new Set(data.deliveredIndices || []);
+      for (const idx of savedDelivered) {
+        deliveredSet.add(idx);
+        const m = markers[idx];
+        if (m) {
+          m.setIcon({
+            path: google.maps.SymbolPath.CIRCLE,
+            scale: 7, fillColor: '#444', fillOpacity: 0.7,
+            strokeColor: '#666', strokeWeight: 1.5,
+          });
+          m.setLabel({ text: '✓', color: '#888', fontSize: '10px', fontWeight: 'bold' });
+        }
+      }
+      // Restore nav position
+      navCurrentStop = data.navCurrentStop || 0;
+      updateNavPanel();
+    }
+  } catch(e) {
+    console.error('Restore session failed:', e);
+    alert('Could not restore your previous session — starting fresh.');
+    clearSession();
+  }
+}
+
 // ─── Google Maps ──────────────────────────────────────────────────────────────
 const GMAPS_API_KEY = 'AIzaSyBjLabRdpEvNXzP1mAdme-RMEOxtbeyNzo';
 
@@ -177,6 +287,7 @@ async function handleFiles(files) {
     }
     // Verify all addresses in background — shows green/red badges as they resolve
     verifyAllAddresses();
+    scheduleSave();
   }
 }
 
@@ -219,6 +330,7 @@ function clearAll() {
   optimizedOrder = [];
   orderedStops = [];
   navCurrentStop = 0;
+  deliveredSet = new Set();
   addrVerified.clear();
   allNavSteps = [];
   _stepIdx    = 0;
@@ -236,6 +348,7 @@ function clearAll() {
   if (fallbackPoly)    { fallbackPoly.setMap(null);    fallbackPoly   = null; }
   if (locationMarker)  { locationMarker.setMap(null);  locationMarker = null; }
   stopGpsTracking();
+  clearSession();
 }
 
 // Drag & drop — supports multiple files
@@ -365,6 +478,7 @@ function onAddrEdit(i, input) {
   input.parentElement.className = /\b[A-Z]{2}\b/.test(newVal) ? '' : 'addr-partial';
   // Re-verify this address in background
   verifyAddress(newVal).then(() => renderAddressList());
+  scheduleSave();
 }
 
 function syncAddressesFromDom() {
@@ -376,6 +490,7 @@ function deleteAddress(i) {
   addrVerified.delete(normalizeKey(addresses[i]));
   addresses.splice(i, 1);
   renderAddressList();
+  scheduleSave();
 }
 function addAddressManually() {
   const inp = document.getElementById('new-address-input');
@@ -383,6 +498,7 @@ function addAddressManually() {
   syncAddressesFromDom(); addresses.push(val); inp.value = '';
   renderAddressList();
   verifyAddress(val).then(() => renderAddressList());
+  scheduleSave();
 }
 document.getElementById('new-address-input').addEventListener('keydown', e => { if (e.key === 'Enter') addAddressManually(); });
 
@@ -625,6 +741,7 @@ function showResultOnMap(ordered) {
 
   // Load real road paths in background
   drawRealRoads(ordered);
+  scheduleSave();
 }
 
 // ─── Real Road Directions (batched, 25 stops max per request) ─────────────────
@@ -816,8 +933,10 @@ function markDelivered() {
     });
     m.setLabel({ text: '✓', color: '#888', fontSize: '10px', fontWeight: 'bold' });
   }
+  deliveredSet.add(navCurrentStop);
   navCurrentStop++;
   updateNavPanel();
+  saveSession();  // immediate save — don't debounce delivery progress
 }
 
 function openCurrentStop() {
@@ -850,4 +969,5 @@ function darkMapStyles() {
   loadDeliveryArea();
   const s = localStorage.getItem('start_address');
   if (s) document.getElementById('start-address').value = s;
+  checkSavedSession();
 })();
