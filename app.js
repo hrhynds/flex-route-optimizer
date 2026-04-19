@@ -371,28 +371,43 @@ dropZone.addEventListener('drop', e => {
 
 // ─── Address Parsing ──────────────────────────────────────────────────────────
 function fixOcrErrors(text) {
-  return text
-    // ── Stop number extraction ────────────────────────────────────────────────
-    // Tesseract reads the circled stop number and "Expected by 8:00 AM" as ONE
-    // line because they share the same visual row in the Flex app.
-    // Split them so the number becomes its own line and the noise filter can
-    // remove "Expected by..." without taking the number with it.
-    // Handles: "19 Expected by", "(19) Expected by", "19Expected by"
-    .replace(/\(?(\d{1,3})\)?\s*(expected\s+by)\b/gi, '$1\n$2')
+  const result = text
+    // ── OCR digit/letter swaps FIRST so the split patterns below see clean digits
+    // Fixes "l9 Expected by" → "19 Expected by" before the split runs.
+    // Extended from \d{3,} to \d+ to catch 1–2 digit stop numbers (e.g. l9 → 19).
+    .replace(/(?<!\w)[lI](\d+)/g, '1$1')
+    .replace(/(?<!\w)O(\d+)/g,    '0$1')
 
-    // ── Common OCR digit/letter swaps ─────────────────────────────────────────
-    .replace(/(?<!\w)[lI](\d{3,})/g, '1$1')
-    .replace(/(?<!\w)O(\d{3,})/g,    '0$1')
+    // ── Stop number extraction ────────────────────────────────────────────────
+    // Tesseract reads the circled stop number and the following keyword as ONE
+    // line. Split them so the number becomes its own line; the noise filter then
+    // removes the keyword text without taking the number with it.
+    // Handles: "19 Expected by", "(19) Arrive", "19Deliver", etc.
+    .replace(/\(?(\d{1,3})\)?\s*(expected\s+by|arrive|deliver)\b/gi, '$1\n$2')
+
+    // ── Fallback: stop number inline with house number ────────────────────────
+    // e.g. "19 5487 CINNAMON CT" → "19\n5487 CINNAMON CT"
+    // Matches a 1–2 digit stop followed by a 3–5 digit house number + letter.
+    .replace(/^(\d{1,2})\s+(\d{3,5}\s+[A-Za-z])/gm, '$1\n$2')
+
+    // ── Remaining OCR fixes ───────────────────────────────────────────────────
     .replace(/(\d)([A-Z][a-z]{2,})/g, '$1 $2')
     .replace(/\b(\d)[,.](\d{3})\s/g, '$1$2 ');
+
+  console.debug('[OCR] fixOcrErrors output:\n', result.substring(0, 600));
+  return result;
 }
 
 function parseAddresses(rawText) {
+  console.debug('[OCR] raw OCR text:\n', rawText.substring(0, 600));
+
   const cleaned = fixOcrErrors(rawText)
     .replace(/\r\n/g, '\n').replace(/[|¦]/g, 'I')
     .replace(/['']/g, "'").replace(/[""]/g, '"')
     // OCR sometimes reads 0 as O inside zip codes: "4800I" → "48001"
     .replace(/\b(\d{4})[lI]\b/g, '$10');
+
+  console.debug('[OCR] after full cleanup:\n', cleaned.substring(0, 600));
 
   // Keep lines longer than 2 chars OR pure-digit lines (short house numbers)
   const rawLines = cleaned.split('\n').map(l => l.trim())
@@ -419,6 +434,8 @@ function parseAddresses(rawText) {
   ].map(r => r.source).join('|'), 'i');
 
   const lines = rawLines.filter(l => !noiseRe.test(l));
+
+  console.debug('[OCR] after noise filter:', lines);
 
   // ── Merge bare house number with next line when OCR splits them ──────────
   const dirStreetRe = /^[NSEWnsew]\.?\s+[A-Za-z]/;
@@ -488,6 +505,8 @@ function parseAddresses(rawText) {
     }
     i++;
   }
+
+  console.debug('[OCR] detected stops:', found.map(f => `stop=${f.stop ?? '—'} | ${f.address}`));
 
   const seen = new Set();
   return found.filter(a => {
