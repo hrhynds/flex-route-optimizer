@@ -235,17 +235,28 @@ function setOcrProgress(pct, msg) {
   document.getElementById('ocr-progress').style.display = 'block';
 }
 
+let _ocrBusy = false;
+
 async function handleFiles(files) {
   if (!files || !files.length) return;
+  if (_ocrBusy) {
+    setOcrProgress(0, '⏳ Still processing previous screenshots — please wait…');
+    document.getElementById('ocr-progress').style.display = 'block';
+    return;
+  }
+  _ocrBusy = true;
   const arr = Array.from(files);
+  // Capture offset before adding new thumbnails so badges land on the right thumbs
+  const thumbOffset = document.getElementById('photo-thumbs').children.length;
 
   document.getElementById('addresses-section').style.display = 'block';
   document.getElementById('ocr-progress').style.display = 'block';
   document.getElementById('photo-strip').style.display = 'flex';
 
+  try {
   for (let i = 0; i < arr.length; i++) {
     const file = arr[i];
-    const label = `Photo ${i + 1}/${arr.length}`;
+    const label = `Photo ${thumbOffset + i + 1}`;
 
     // Add thumbnail immediately
     addThumbnail(file, label);
@@ -259,7 +270,7 @@ async function handleFiles(files) {
       newAddrs = await extractFromImage(blob, label);
     } catch (err) {
       console.error('OCR error on', file.name, err);
-      updateThumbnailBadge(i, '⚠ failed', true);
+      updateThumbnailBadge(thumbOffset + i, '⚠ failed', true);
       setOcrProgress(0, `⚠ Couldn't read ${file.name} — check your internet connection and try again.`);
       continue;
     }
@@ -269,8 +280,11 @@ async function handleFiles(files) {
     const unique = newAddrs.filter(a => !existing.has(normalizeKey(a)));
     addresses.push(...unique);
 
-    updateThumbnailBadge(i, `${newAddrs.length} addr`);
+    updateThumbnailBadge(thumbOffset + i, `${newAddrs.length} addr`);
     renderAddressList();
+  }
+  } finally {
+    _ocrBusy = false;
   }
 
   // Final status
@@ -492,6 +506,19 @@ function deleteAddress(i) {
   renderAddressList();
   scheduleSave();
 }
+function saveAddresses() {
+  syncAddressesFromDom();
+  if (!addresses.length) { alert('No addresses to save yet.'); return; }
+  const text = addresses.map((a, i) => `${i + 1}. ${a}`).join('\n');
+  const blob = new Blob([text], { type: 'text/plain' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `flex-addresses-${new Date().toLocaleDateString('en-CA')}.txt`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
 function addAddressManually() {
   const inp = document.getElementById('new-address-input');
   const val = inp.value.trim(); if (!val) return;

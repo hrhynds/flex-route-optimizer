@@ -630,6 +630,20 @@ button:active {
   background: rgba(74, 144, 226, 0.12);
 }
 
+.save-addr-btn {
+  background: transparent;
+  border: 1px solid #4caf87;
+  color: #4caf87;
+  font-size: 0.8rem;
+  padding: 4px 12px;
+  border-radius: 20px;
+  font-weight: 600;
+}
+
+.save-addr-btn:hover {
+  background: rgba(76, 175, 135, 0.12);
+}
+
 #addr-count {
   display: inline-block;
   font-size: 0.82rem;
