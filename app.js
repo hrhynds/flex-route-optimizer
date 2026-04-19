@@ -372,14 +372,18 @@ dropZone.addEventListener('drop', e => {
 // ─── Address Parsing ──────────────────────────────────────────────────────────
 function fixOcrErrors(text) {
   return text
-    // Common OCR digit/letter swaps at the START of a house number:
-    // "l234", "I234", "O234" → "1234", "1234", "0234"
+    // ── Stop number extraction ────────────────────────────────────────────────
+    // Tesseract reads the circled stop number and "Expected by 8:00 AM" as ONE
+    // line because they share the same visual row in the Flex app.
+    // Split them so the number becomes its own line and the noise filter can
+    // remove "Expected by..." without taking the number with it.
+    // Handles: "19 Expected by", "(19) Expected by", "19Expected by"
+    .replace(/\(?(\d{1,3})\)?\s*(expected\s+by)\b/gi, '$1\n$2')
+
+    // ── Common OCR digit/letter swaps ─────────────────────────────────────────
     .replace(/(?<!\w)[lI](\d{3,})/g, '1$1')
     .replace(/(?<!\w)O(\d{3,})/g,    '0$1')
-    // Missing space between a digit and an uppercase letter that starts a word
-    // e.g. "123Main" → "123 Main" — happens when OCR merges tokens
     .replace(/(\d)([A-Z][a-z]{2,})/g, '$1 $2')
-    // Stray period or comma inside a house number: "1,234 Oak" → "1234 Oak"
     .replace(/\b(\d)[,.](\d{3})\s/g, '$1$2 ');
 }
 
