@@ -216,11 +216,11 @@ async function extractFromImage(imageBlob, photoLabel) {
   const a1 = parseAddresses(text1);
   const a2 = parseAddresses(text2);
 
-  // Merge: keep unique from both passes
-  const seen = new Set(a1.map(normalizeKey));
+  // Merge: keep unique from both passes (prefer a1's stop number when both find same address)
+  const seen = new Set(a1.map(a => normalizeKey(a.address)));
   const merged = [...a1];
   for (const a of a2) {
-    if (!seen.has(normalizeKey(a))) { seen.add(normalizeKey(a)); merged.push(a); }
+    if (!seen.has(normalizeKey(a.address))) { seen.add(normalizeKey(a.address)); merged.push(a); }
   }
   return merged;
 }
@@ -275,8 +275,8 @@ async function handleFiles(files) {
     }
 
     // Append unique addresses
-    const existing = new Set(addresses.map(normalizeKey));
-    const unique = newAddrs.filter(a => !existing.has(normalizeKey(a)));
+    const existing = new Set(addresses.map(a => normalizeKey(a.address)));
+    const unique = newAddrs.filter(a => !existing.has(normalizeKey(a.address)));
     addresses.push(...unique);
 
     updateThumbnailBadge(thumbOffset + i, `${newAddrs.length} addr`);
@@ -294,7 +294,7 @@ async function handleFiles(files) {
     setOcrProgress(100, `Done — ${total} addresses from ${arr.length} screenshot${arr.length > 1 ? 's' : ''}`);
     setTimeout(() => document.getElementById('ocr-progress').style.display = 'none', 3000);
     updateAddrCount();
-    if (addresses.some(a => !/\b[A-Z]{2}\b/.test(a))) {
+    if (addresses.some(a => !/\b[A-Z]{2}\b/.test(a.address))) {
       const el = document.getElementById('delivery-area');
       if (!el.value.trim()) el.focus();
     }
@@ -430,22 +430,37 @@ function parseAddresses(rawText) {
   }
 
   const found = [];
-  // Allows "1234" or "12345" including ordinals like "12th", "3rd", and leading zero addresses
   const houseNumRe     = /^\d{1,5}\s+\S/;
   const aptRe          = /^(apt|unit|suite|ste|#\s*[\w-]+|bldg|building|floor|fl|room|rm)\.?\s*\S/i;
   const cityStateZipRe = /^[A-Za-z][A-Za-z\s\-'\.]{1,35},?\s+[A-Z]{2}\s+\d{5}(-\d{4})?$/;
   const cityStateRe    = /^[A-Za-z][A-Za-z\s\-'\.]{1,35},?\s+[A-Z]{2}$/;
   const stateZipRe     = /\b[A-Z]{2}\s+\d{5}(-\d{4})?\b/;
-  // Accepts "123 Main St, City, MI 48001" or "123 Main St, City MI 48001" (no comma before state)
   const oneLineRe      = /^\d{1,5}\s+.{4,},\s*.{2,},?\s+[A-Z]{2}(\s+\d{5})?/;
   const streetKwRe     = /\b(st\.?|ave\.?|blvd\.?|dr\.?|rd\.?|way|ln\.?|ct\.?|pl\.?|pkwy|hwy|highway|route|rte|circle|cir|terr?\.?|trail|trl|loop|court|place|drive|street|avenue|boulevard|lane|road|run|row|ridge|park|point|pointe|bend|crossing|chase|grove|glen|hollow|hill|heights|vista|view|creek|bridge|gate|pass|path|pike|square|sq\.?|commons|village|manor|estates?|xing|alley|aly|walk|woods|meadow|orchard|spur|trace|trce|landing|island|isle|plaza|mews|cove|cv|bay|bayou|bluff|blf|branch|brch|brook|brk|burg|bypass|byp|canyon|cyn|cape|cpe|causeway|cswy|cliff|clf|club|clb|corner|cor|creek|crk|crescent|cres|dale|dl|dam|dv|divide|dv|expressway|expy|extension|ext|falls|fls|ferry|fry|field|fld|flats|flt|ford|frd|forest|frst|forge|frg|fork|frk|fort|ft|freeway|fwy|gardens|gdns|gateway|gtwy|gorge|grg|harbor|hbr|haven|hvn|heath|hth|highway|hwy|hollow|holw|inlet|inlt|jct|junction|key|ky|knoll|knl|lake|lk|light|lgt|lock|lck|meadows|mdws|mill|ml|mission|msn|mount|mt|mountain|mtn|neck|nck|orchard|orch|oval|ovl|pass|psge|passage|path|pth|pier|pir|pines|pnes|place|plz|plain|pln|plaza|plz|port|prt|prairie|pr|radial|radl|ranch|rnch|rapids|rpds|rest|rst|ridge|rdg|river|rvr|shoal|shl|shore|shr|skyway|skwy|spring|spg|spur|spur|square|sq|station|sta|stream|strm|summit|smt|terrace|ter|trace|trce|track|trak|trail|trl|tunnel|tunl|turnpike|tpke|union|un|valley|vly|viaduct|via|village|vlg|vista|vis|walk|wlk)\b/i;
+
+  // Track the most recent standalone 1–3 digit number seen before an address.
+  // After noise filtering, these are the Amazon Flex stop sequence numbers
+  // (the circled numbers on the left of the itinerary list).
+  // They stay standalone because the NEXT line starts with a digit (house number),
+  // so the merge step never combined them with a street name.
+  let pendingStop = null;
 
   let i = 0;
   while (i < mergedLines.length) {
     const line = mergedLines[i];
 
-    // Single-line complete address
-    if (oneLineRe.test(line)) { found.push(line); i++; continue; }
+    // Standalone 1–3 digit line that survived the merge step = stop number
+    if (/^\d{1,3}$/.test(line)) {
+      pendingStop = line;
+      i++;
+      continue;
+    }
+
+    if (oneLineRe.test(line)) {
+      found.push({ address: line, stop: pendingStop });
+      pendingStop = null;
+      i++; continue;
+    }
 
     if (houseNumRe.test(line)) {
       const parts = [line];
@@ -461,34 +476,45 @@ function parseAddresses(rawText) {
         } else break;
       }
       const candidate = parts.join(', ').replace(/,\s*,/g, ',').trim();
-      if (streetKwRe.test(candidate) || stateZipRe.test(candidate)) found.push(candidate);
+      if (streetKwRe.test(candidate) || stateZipRe.test(candidate)) {
+        found.push({ address: candidate, stop: pendingStop });
+        pendingStop = null;
+      }
       i = j; continue;
     }
     i++;
   }
 
   const seen = new Set();
-  return found.filter(a => { const k = normalizeKey(a); if (seen.has(k)) return false; seen.add(k); return true; });
+  return found.filter(a => {
+    const k = normalizeKey(a.address);
+    if (seen.has(k)) return false;
+    seen.add(k);
+    return true;
+  });
 }
 
 // ─── Address List UI ──────────────────────────────────────────────────────────
 function renderAddressList() {
   const list = document.getElementById('address-list');
   list.innerHTML = '';
-  addresses.forEach((addr, i) => {
+  addresses.forEach((item, i) => {
+    const addr     = item.address;
+    const stop     = item.stop;
     const partial  = !/\b[A-Z]{2}\b/.test(addr);
     const vStatus  = addrVerified.get(normalizeKey(addr));
-    const statusCls = !vStatus             ? 'vstatus-pending'
-                    : vStatus.ok           ? 'vstatus-ok'
-                    :                        'vstatus-fail';
-    const statusTip = !vStatus  ? 'Not verified yet'
+    const statusCls = !vStatus   ? 'vstatus-pending'
+                    : vStatus.ok ? 'vstatus-ok'
+                    :              'vstatus-fail';
+    const statusTip = !vStatus   ? 'Not verified yet'
                     : vStatus.ok ? 'Found on Google Maps ✓'
                     :              'Could not find on Google Maps';
     const mapsUrl  = `https://www.google.com/maps/search/${encodeURIComponent(enrichAddress(addr))}`;
     const li = document.createElement('li');
     li.className = partial ? 'addr-partial' : '';
+    if (stop) li.dataset.stop = stop;
     li.innerHTML = `
-      <span class="addr-num">${i + 1}</span>
+      ${stop ? `<span class="stop-badge" title="Amazon Flex stop #${escHtml(stop)}">#${escHtml(stop)}</span>` : `<span class="addr-num">${i + 1}</span>`}
       <span class="addr-vstatus ${statusCls}" title="${statusTip}"></span>
       <input type="text" value="${escHtml(addr)}"
              onchange="onAddrEdit(${i}, this)" />
@@ -503,21 +529,22 @@ function renderAddressList() {
 
 function onAddrEdit(i, input) {
   const newVal = input.value;
-  addresses[i] = newVal;
-  addrVerified.delete(normalizeKey(newVal)); // clear cache so it re-verifies
+  addresses[i].address = newVal;
+  addrVerified.delete(normalizeKey(newVal));
   input.parentElement.className = /\b[A-Z]{2}\b/.test(newVal) ? '' : 'addr-partial';
-  // Re-verify this address in background
   verifyAddress(newVal).then(() => renderAddressList());
   scheduleSave();
 }
 
 function syncAddressesFromDom() {
-  addresses = Array.from(document.querySelectorAll('#address-list input[type=text]'))
-    .map(el => el.value.trim()).filter(Boolean);
+  addresses = Array.from(document.querySelectorAll('#address-list li')).map(li => ({
+    address: (li.querySelector('input[type=text]')?.value || '').trim(),
+    stop:    li.dataset.stop || null,
+  })).filter(a => a.address);
 }
 function deleteAddress(i) {
   syncAddressesFromDom();
-  addrVerified.delete(normalizeKey(addresses[i]));
+  addrVerified.delete(normalizeKey(addresses[i].address));
   addresses.splice(i, 1);
   renderAddressList();
   scheduleSave();
@@ -525,7 +552,9 @@ function deleteAddress(i) {
 function saveAddresses() {
   syncAddressesFromDom();
   if (!addresses.length) { alert('No addresses to save yet.'); return; }
-  const text = addresses.map((a, i) => `${i + 1}. ${a}`).join('\n');
+  const text = addresses.map((a, i) =>
+    `${i + 1}.${a.stop ? ` [Stop #${a.stop}]` : ''} ${a.address}`
+  ).join('\n');
   const blob = new Blob([text], { type: 'text/plain' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
@@ -538,7 +567,7 @@ function saveAddresses() {
 function addAddressManually() {
   const inp = document.getElementById('new-address-input');
   const val = inp.value.trim(); if (!val) return;
-  syncAddressesFromDom(); addresses.push(val); inp.value = '';
+  syncAddressesFromDom(); addresses.push({ address: val, stop: null }); inp.value = '';
   renderAddressList();
   verifyAddress(val).then(() => renderAddressList());
   scheduleSave();
@@ -559,12 +588,11 @@ async function verifyAddress(addr) {
 }
 
 async function verifyAllAddresses() {
-  // Verify addresses in the background, re-rendering after each one
-  const toCheck = addresses.filter(a => !addrVerified.has(normalizeKey(a)));
-  for (const addr of toCheck) {
-    await verifyAddress(addr);
+  const toCheck = addresses.filter(a => !addrVerified.has(normalizeKey(a.address)));
+  for (const item of toCheck) {
+    await verifyAddress(item.address);
     renderAddressList();
-    await sleep(120); // gentle rate-limit
+    await sleep(120);
   }
 }
 
@@ -669,7 +697,7 @@ async function optimizeRoute() {
   if (!googleMapsLoaded)    { alert('Google Maps is still loading — wait a moment.'); return; }
 
   onDeliveryAreaChange();
-  const enriched   = addresses.map(enrichAddress);
+  const enriched   = addresses.map(a => enrichAddress(a.address));
   const startRaw   = document.getElementById('start-address').value.trim();
   if (startRaw) localStorage.setItem('start_address', startRaw);
   const startEnr   = startRaw ? enrichAddress(startRaw) : null;

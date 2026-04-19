@@ -220,6 +220,20 @@ button:active {
   text-align: right;
 }
 
+/* Amazon Flex stop number badge */
+.stop-badge {
+  flex-shrink: 0;
+  font-size: 0.72rem;
+  font-weight: 700;
+  color: #0fd;
+  background: rgba(0, 255, 220, 0.1);
+  border: 1px solid rgba(0, 255, 220, 0.35);
+  border-radius: 6px;
+  padding: 2px 6px;
+  white-space: nowrap;
+  letter-spacing: 0.3px;
+}
+
 /* Verification status dot */
 .addr-vstatus {
   width: 8px;
