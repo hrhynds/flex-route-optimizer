@@ -460,85 +460,29 @@ button:active {
   background: #0f1117;
 }
 
-/* Navigation panel */
-#nav-panel {
-  background: #12151f;
-  border: 1px solid #2a2d3a;
-  border-radius: 12px;
-  padding: 16px;
+/* Batch Open-in-Maps panel */
+#maps-batch-panel {
   margin-bottom: 16px;
 }
 
-.nav-info {
-  margin-bottom: 14px;
-}
-
-.nav-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 6px;
-}
-
-#nav-stop-num {
-  font-size: 0.75rem;
-  font-weight: 700;
-  color: #4a90e2;
-  text-transform: uppercase;
-  letter-spacing: 0.6px;
-}
-
-#nav-stop-dist {
-  font-size: 0.8rem;
-  font-weight: 600;
-  color: #4caf87;
-}
-
-#nav-stop-addr {
+#open-maps-btn {
+  width: 100%;
+  padding: 16px;
   font-size: 1.05rem;
-  font-weight: 600;
-  color: #e0e0e0;
-  line-height: 1.3;
+  border-radius: 12px;
+  background: linear-gradient(135deg, #34a853, #2a8a44);
+  min-height: 56px;
+  transition: opacity 0.2s, background 0.2s;
 }
 
-.nav-btns {
-  display: flex;
-  gap: 10px;
-}
+#open-maps-btn:hover { background: linear-gradient(135deg, #2a8a44, #1f6e35); }
 
-.nav-delivered-btn {
-  flex: 1;
-  padding: 13px;
-  font-size: 0.95rem;
-  background: #4caf87;
-  border-radius: 10px;
-}
-
-.nav-delivered-btn:hover { background: #3d9a72; }
-
-.nav-open-btn {
-  flex: 1;
-  padding: 13px;
-  font-size: 0.95rem;
-  background: #34a853;
-  border-radius: 10px;
-}
-
-.nav-open-btn:hover { background: #2a8a44; }
-
-.nav-complete {
-  text-align: center;
-  font-size: 1.1rem;
-  font-weight: 600;
-  color: #4caf87;
-  padding: 12px 0;
-}
-
-.result-note {
-  margin-top: 10px !important;
+.batch-hint {
+  margin-top: 8px !important;
   font-size: 0.8rem !important;
-  color: #555 !important;
+  color: #666 !important;
   text-align: center;
+  line-height: 1.4 !important;
 }
 
 /* Photo strip */
@@ -655,25 +599,65 @@ button:active {
   border: 1px solid rgba(76, 175, 135, 0.3);
 }
 
-@media (max-width: 500px) {
-  header h1 { font-size: 1.5rem; }
+@media (max-width: 600px) {
+  body {
+    padding: 12px 10px 80px;
+  }
+
+  header { margin-bottom: 20px; }
+  header h1 { font-size: 1.4rem; }
+  header .subtitle { font-size: 0.85rem; }
+
+  .card { padding: 16px; margin-bottom: 14px; }
+
+  /* Prevent iOS from zooming in on input focus */
+  input, select, textarea {
+    font-size: 16px !important;
+  }
+
+  /* Bigger touch targets */
+  button { min-height: 48px; }
+
   .input-row { flex-direction: column; }
   .add-address-row { flex-direction: column; }
+
+  /* Drop zone — more compact on phone */
+  #drop-zone { padding: 24px 16px; }
+  .drop-inner p { font-size: 0.95rem; }
+
+  /* Photo strip scrolls horizontally instead of wrapping */
+  #photo-thumbs {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    padding-bottom: 4px;
+  }
+  .photo-thumb { width: 80px; height: 80px; flex-shrink: 0; }
+
+  /* Address list rows */
+  #address-list li {
+    padding: 10px 10px;
+    gap: 6px;
+  }
+  #address-list li input { font-size: 15px !important; }
+
+  /* Optimize button */
+  #optimize-btn { padding: 16px; font-size: 1rem; min-height: 56px; }
+
+  /* Map taller on phone so it fills the viewport better */
+  #map { height: 55vw; min-height: 260px; max-height: 380px; }
+
+  /* Route summary stops list more compact */
+  #route-summary ol { font-size: 0.82rem; line-height: 1.8; }
+
+  /* Batch button */
+  #open-maps-btn { font-size: 1rem; }
+
+  /* addr-count-row chips wrap neatly */
+  #addr-count-row { gap: 8px; }
+  .add-more-btn, .save-addr-btn { padding: 6px 14px; font-size: 0.82rem; }
 }
 
-/* Turn instruction banner */
-#nav-turn {
-  font-size: 0.9rem;
-  font-weight: 600;
-  color: #e0e0e0;
-  background: #0a0d16;
-  border-radius: 8px;
-  padding: 8px 12px;
-  margin-bottom: 12px;
-  min-height: 36px;
-  line-height: 1.4;
-}
-#nav-turn:empty { display: none; }
 
 /* Session restore banner */
 #session-banner {
@@ -739,24 +723,9 @@ button:active {
   border-color: #e05c5c;
   color: #e05c5c;
 }
-@media (max-width: 500px) {
+@media (max-width: 600px) {
   .session-banner-inner { flex-wrap: wrap; }
   .session-actions { width: 100%; }
   .session-resume-btn, .session-discard-btn { flex: 1; text-align: center; }
 }
 
-/* GPS lock button */
-.gps-lock-btn {
-  flex: 0 0 auto;
-  padding: 13px 14px;
-  font-size: 1rem;
-  background: rgba(74, 144, 226, 0.2);
-  border: 1px solid rgba(74, 144, 226, 0.4);
-  border-radius: 10px;
-}
-.gps-lock-btn:hover { background: rgba(74, 144, 226, 0.35); }
-.gps-lock-btn.gps-unlocked {
-  background: rgba(100,100,100,0.2);
-  border-color: rgba(100,100,100,0.3);
-  opacity: 0.6;
-}

@@ -6,21 +6,16 @@ let map            = null;
 let markers        = [];
 let ocrWorker      = null;
 
-// Navigation state
-let orderedStops    = [];   // { lat, lng, address } in optimized order
-let navCurrentStop  = 0;
-let gpsWatchId      = null;
-let locationMarker  = null;
-let dirRenderers    = [];   // DirectionsRenderer instances (one per batch)
-let fallbackPoly    = null; // straight-line fallback while real roads load
-let mapFollowsGps = true;   // map pans to GPS position while navigating
-let allNavSteps   = [];     // flattened step instructions from Directions API
+let orderedStops = [];   // { lat, lng, address } in optimized order
+let dirRenderers = [];   // DirectionsRenderer instances (one per batch)
+let fallbackPoly = null; // straight-line fallback while real roads load
+
+// Which batch of stops we're on for "Open in Maps"
+let currentBatch = 0;
+const MAPS_BATCH_SIZE = 10;
 
 // Address verification cache  key = normalizeKey(addr) → { ok, lat, lng }
 let addrVerified = new Map();
-
-// Indices of stops that have been marked delivered
-let deliveredSet = new Set();
 
 // ─── Session Persistence ──────────────────────────────────────────────────────
 let _saveTimer = null;
@@ -33,12 +28,11 @@ function saveSession() {
   if (!addresses.length && !orderedStops.length) return;
   try {
     localStorage.setItem('flex_session', JSON.stringify({
-      savedAt:         Date.now(),
+      savedAt:        Date.now(),
       addresses,
       orderedStops,
-      navCurrentStop,
-      deliveredIndices: [...deliveredSet],
-      addrVerifiedArr:  [...addrVerified.entries()],
+      currentBatch,
+      addrVerifiedArr: [...addrVerified.entries()],
     }));
   } catch(e) { /* storage full — ignore */ }
 }
@@ -69,7 +63,7 @@ function checkSavedSession() {
       ? `${mins}m ago`
       : `${Math.floor(mins / 60)}h ${mins % 60}m ago`;
     const stopInfo = data.orderedStops?.length
-      ? `${data.orderedStops.length} stops · on stop ${(data.navCurrentStop || 0) + 1} · saved ${ageStr}`
+      ? `${data.orderedStops.length} stops · saved ${ageStr}`
       : `${data.addresses?.length || 0} addresses · saved ${ageStr}`;
     document.getElementById('session-detail').textContent = stopInfo;
     banner.style.display = 'block';
@@ -101,26 +95,9 @@ async function restoreSession() {
       while (!googleMapsLoaded && Date.now() < deadline) await sleep(200);
       if (!googleMapsLoaded) { alert('Google Maps did not load. Try refreshing.'); return; }
 
-      // Render map (resets navCurrentStop → 0)
       showResultOnMap([...orderedStops]);
-
-      // Re-apply delivered markers
-      const savedDelivered = new Set(data.deliveredIndices || []);
-      for (const idx of savedDelivered) {
-        deliveredSet.add(idx);
-        const m = markers[idx];
-        if (m) {
-          m.setIcon({
-            path: google.maps.SymbolPath.CIRCLE,
-            scale: 7, fillColor: '#444', fillOpacity: 0.7,
-            strokeColor: '#666', strokeWeight: 1.5,
-          });
-          m.setLabel({ text: '✓', color: '#888', fontSize: '10px', fontWeight: 'bold' });
-        }
-      }
-      // Restore nav position
-      navCurrentStop = data.navCurrentStop || 0;
-      updateNavPanel();
+      currentBatch = data.currentBatch || 0;
+      updateBatchButton();
     }
   } catch(e) {
     console.error('Restore session failed:', e);
@@ -343,11 +320,8 @@ function clearAll() {
   addresses = [];
   optimizedOrder = [];
   orderedStops = [];
-  navCurrentStop = 0;
-  deliveredSet = new Set();
+  currentBatch = 0;
   addrVerified.clear();
-  allNavSteps = [];
-  _stepIdx    = 0;
   document.getElementById('address-list').innerHTML = '';
   document.getElementById('photo-thumbs').innerHTML = '';
   document.getElementById('photo-strip').style.display = 'none';
@@ -359,9 +333,7 @@ function clearAll() {
   markers = [];
   dirRenderers.forEach(r => r.setMap(null));
   dirRenderers = [];
-  if (fallbackPoly)    { fallbackPoly.setMap(null);    fallbackPoly   = null; }
-  if (locationMarker)  { locationMarker.setMap(null);  locationMarker = null; }
-  stopGpsTracking();
+  if (fallbackPoly) { fallbackPoly.setMap(null); fallbackPoly = null; }
   clearSession();
 }
 
@@ -703,11 +675,8 @@ function showGeoNotice(msg) {
 
 // ─── Result Display ───────────────────────────────────────────────────────────
 function showResultOnMap(ordered) {
-  orderedStops   = ordered;
-  navCurrentStop = 0;
-  allNavSteps  = [];
-  _stepIdx     = 0;
-  mapFollowsGps = true;
+  orderedStops = ordered;
+  currentBatch = 0;
 
   document.getElementById('result-section').style.display = 'block';
   document.getElementById('result-section').scrollIntoView({ behavior: 'smooth' });
@@ -715,9 +684,7 @@ function showResultOnMap(ordered) {
   // Clear old map state
   markers.forEach(m => m.setMap && m.setMap(null));  markers = [];
   dirRenderers.forEach(r => r.setMap(null));          dirRenderers = [];
-  if (fallbackPoly)   { fallbackPoly.setMap(null);   fallbackPoly   = null; }
-  if (locationMarker) { locationMarker.setMap(null); locationMarker = null; }
-  stopGpsTracking();
+  if (fallbackPoly) { fallbackPoly.setMap(null); fallbackPoly = null; }
 
   if (!map) {
     map = new google.maps.Map(document.getElementById('map'), {
@@ -759,12 +726,7 @@ function showResultOnMap(ordered) {
       <ol>${ordered.map(p => `<li>${escHtml(p.address)}</li>`).join('')}</ol>
     </div>`;
 
-  // Nav panel
-  updateNavPanel();
-  document.getElementById('nav-panel').style.display = 'block';
-
-  // Start GPS dot
-  startGpsTracking();
+  updateBatchButton();
 
   // Load real road paths in background
   drawRealRoads(ordered);
@@ -787,16 +749,8 @@ async function drawRealRoads(ordered) {
       const result = await requestDirections(batches[b]);
       if (!result) continue;
 
-      // Accumulate actual drive time + extract turn-by-turn steps
       result.routes[0].legs.forEach(leg => {
         totalDriveMin += leg.duration.value / 60;
-        leg.steps.forEach(step => {
-          allNavSteps.push({
-            instruction: step.instructions.replace(/<[^>]+>/g, ''),
-            lat: step.start_location.lat(),
-            lng: step.start_location.lng(),
-          });
-        });
       });
 
       const renderer = new google.maps.DirectionsRenderer({
@@ -815,7 +769,6 @@ async function drawRealRoads(ordered) {
     if (b < batches.length - 1) await sleep(250);
   }
 
-  // Once all batches done, remove the dashed fallback and update status
   if (loadedBatches === batches.length && fallbackPoly) {
     fallbackPoly.setMap(null);
     fallbackPoly = null;
@@ -844,132 +797,56 @@ function requestDirections(pts) {
   });
 }
 
-// ─── GPS Tracking ─────────────────────────────────────────────────────────────
-function startGpsTracking() {
-  if (!('geolocation' in navigator)) return;
-  stopGpsTracking();
-  gpsWatchId = navigator.geolocation.watchPosition(pos => {
-    const { latitude: lat, longitude: lng } = pos.coords;
-    const latlng = { lat, lng };
+// ─── Batched Open in Maps ─────────────────────────────────────────────────────
+function openNextBatch() {
+  const total = orderedStops.length;
+  if (!total) return;
 
-    // Update or create GPS dot
-    if (!locationMarker) {
-      locationMarker = new google.maps.Marker({
-        position: latlng, map,
-        icon: {
-          path: google.maps.SymbolPath.CIRCLE,
-          scale: 10, fillColor: '#4a90e2', fillOpacity: 1,
-          strokeColor: '#fff', strokeWeight: 3,
-        },
-        title: 'Your location', zIndex: 999,
-      });
-    } else {
-      locationMarker.setPosition(latlng);
-    }
+  const startIdx = currentBatch * MAPS_BATCH_SIZE;
 
-    // Pan map to follow GPS
-    if (mapFollowsGps && map) map.panTo(latlng);
-
-    // Update distance to current stop
-    if (navCurrentStop < orderedStops.length) {
-      const miles = haversineDistance(latlng, orderedStops[navCurrentStop]);
-      const distEl = document.getElementById('nav-stop-dist');
-      if (distEl) distEl.textContent = miles < 0.1
-        ? `${Math.round(miles * 5280)} ft away`
-        : `${miles.toFixed(1)} mi away`;
-
-      // Auto-arrive when within 80 ft
-      if (miles * 5280 < 80) autoArrive();
-    }
-
-    // Show next turn instruction
-    updateTurnInstruction(latlng);
-
-  }, err => console.warn('GPS:', err.message),
-  { enableHighAccuracy: true, maximumAge: 3000, timeout: 15000 });
-}
-
-function stopGpsTracking() {
-  if (gpsWatchId !== null) { navigator.geolocation.clearWatch(gpsWatchId); gpsWatchId = null; }
-}
-
-let _lastAutoArrive = 0;
-function autoArrive() {
-  const now = Date.now();
-  if (now - _lastAutoArrive < 30000) return; // cooldown 30s
-  _lastAutoArrive = now;
-  markDelivered();
-}
-
-function toggleGpsLock() {
-  mapFollowsGps = !mapFollowsGps;
-  const btn = document.getElementById('gps-lock-btn');
-  if (btn) btn.classList.toggle('gps-unlocked', !mapFollowsGps);
-  if (mapFollowsGps && locationMarker && map) map.panTo(locationMarker.getPosition());
-}
-
-// Show the closest upcoming turn instruction
-let _stepIdx = 0;
-function updateTurnInstruction(latlng) {
-  if (!allNavSteps.length) return;
-  // Find nearest step ahead
-  let best = _stepIdx, bestDist = Infinity;
-  const searchFrom = Math.max(0, _stepIdx - 1);
-  const searchTo   = Math.min(allNavSteps.length - 1, _stepIdx + 10);
-  for (let i = searchFrom; i <= searchTo; i++) {
-    const d = haversineDistance(latlng, allNavSteps[i]);
-    if (d < bestDist) { bestDist = d; best = i; }
-  }
-  // Advance past steps we've already passed (within 150 ft)
-  if (bestDist * 5280 < 150 && best < allNavSteps.length - 1) best++;
-  _stepIdx = best;
-  const el = document.getElementById('nav-turn');
-  if (el && allNavSteps[_stepIdx]) el.textContent = allNavSteps[_stepIdx].instruction;
-}
-
-// ─── Navigation Panel ─────────────────────────────────────────────────────────
-function updateNavPanel() {
-  const panel = document.getElementById('nav-panel');
-  if (!panel) return;
-
-  if (navCurrentStop >= orderedStops.length) {
-    panel.innerHTML = '<div class="nav-complete">🎉 All stops delivered!</div>';
+  // If we've opened all batches, wrap back to beginning
+  if (startIdx >= total) {
+    currentBatch = 0;
+    updateBatchButton();
     return;
   }
 
-  const stop  = orderedStops[navCurrentStop];
-  const num   = navCurrentStop + 1;
+  const batch = orderedStops.slice(startIdx, startIdx + MAPS_BATCH_SIZE);
+  const parts = batch.map(s => encodeURIComponent(s.address));
+  window.open(`https://www.google.com/maps/dir/${parts.join('/')}`, '_blank');
+
+  currentBatch++;
+  updateBatchButton();
+  scheduleSave();
+}
+
+function updateBatchButton() {
+  const btn  = document.getElementById('open-maps-btn');
+  const hint = document.getElementById('batch-hint');
+  if (!btn) return;
+
   const total = orderedStops.length;
+  if (!total) return;
 
-  document.getElementById('nav-stop-num').textContent  = `Stop ${num} of ${total}`;
-  document.getElementById('nav-stop-addr').textContent = stop.address;
-  document.getElementById('nav-stop-dist').textContent = '';
+  const startIdx = currentBatch * MAPS_BATCH_SIZE;
 
-  // Pan map to current stop
-  if (map) map.panTo({ lat: stop.lat, lng: stop.lng });
-}
-
-function markDelivered() {
-  // Grey out the completed marker
-  const m = markers[navCurrentStop];
-  if (m) {
-    m.setIcon({
-      path: google.maps.SymbolPath.CIRCLE,
-      scale: 7, fillColor: '#444', fillOpacity: 0.7,
-      strokeColor: '#666', strokeWeight: 1.5,
-    });
-    m.setLabel({ text: '✓', color: '#888', fontSize: '10px', fontWeight: 'bold' });
+  if (startIdx >= total) {
+    btn.textContent = 'All stops opened — tap to restart';
+    btn.style.opacity = '0.65';
+    if (hint) hint.textContent = `All ${total} stops have been sent to Google Maps.`;
+    return;
   }
-  deliveredSet.add(navCurrentStop);
-  navCurrentStop++;
-  updateNavPanel();
-  saveSession();  // immediate save — don't debounce delivery progress
-}
 
-function openCurrentStop() {
-  if (navCurrentStop >= orderedStops.length) return;
-  const addr = encodeURIComponent(orderedStops[navCurrentStop].address);
-  window.open(`https://www.google.com/maps/dir/?api=1&destination=${addr}&travelmode=driving`, '_blank');
+  btn.style.opacity = '1';
+  const endIdx   = Math.min(startIdx + MAPS_BATCH_SIZE, total);
+  const batchNum = currentBatch + 1;
+  const totalBatches = Math.ceil(total / MAPS_BATCH_SIZE);
+  btn.textContent = `Open in Maps: Stops ${startIdx + 1}–${endIdx} →`;
+  if (hint) {
+    hint.textContent = totalBatches > 1
+      ? `Trip ${batchNum} of ${totalBatches} · tap again after each trip for the next batch`
+      : `Opens all ${total} stops in Google Maps`;
+  }
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
