@@ -135,14 +135,36 @@ function enrichAddress(addr) {
 }
 
 // ─── Image Normalization ──────────────────────────────────────────────────────
+// Upscale small images + convert to grayscale + boost contrast.
+// Tesseract accuracy improves significantly when characters are larger and
+// color noise from the Flex app UI is removed.
 function normalizeImage(file) {
   return new Promise(resolve => {
     const img = new Image();
     const url = URL.createObjectURL(file);
     img.onload = () => {
+      // Scale up so the image is at least 2400px wide (most phones are ~1080px)
+      const TARGET_W = 2400;
+      const scale = img.naturalWidth < TARGET_W ? TARGET_W / img.naturalWidth : 1;
+      const w = Math.round(img.naturalWidth  * scale);
+      const h = Math.round(img.naturalHeight * scale);
+
       const c = document.createElement('canvas');
-      c.width = img.naturalWidth; c.height = img.naturalHeight;
-      c.getContext('2d').drawImage(img, 0, 0);
+      c.width = w; c.height = h;
+      const ctx = c.getContext('2d');
+      if (scale > 1) { ctx.imageSmoothingEnabled = true; ctx.imageSmoothingQuality = 'high'; }
+      ctx.drawImage(img, 0, 0, w, h);
+
+      // Grayscale + contrast boost so text pops against the Flex app background
+      const id = ctx.getImageData(0, 0, w, h);
+      const d  = id.data;
+      for (let i = 0; i < d.length; i += 4) {
+        const gray = 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2];
+        const boosted = Math.min(255, Math.max(0, (gray - 128) * 1.4 + 128));
+        d[i] = d[i + 1] = d[i + 2] = boosted;
+      }
+      ctx.putImageData(id, 0, 0);
+
       URL.revokeObjectURL(url);
       c.toBlob(b => resolve(b || file), 'image/png');
     };
@@ -348,71 +370,93 @@ dropZone.addEventListener('drop', e => {
 });
 
 // ─── Address Parsing ──────────────────────────────────────────────────────────
+function fixOcrErrors(text) {
+  return text
+    // Common OCR digit/letter swaps at the START of a house number:
+    // "l234", "I234", "O234" → "1234", "1234", "0234"
+    .replace(/(?<!\w)[lI](\d{3,})/g, '1$1')
+    .replace(/(?<!\w)O(\d{3,})/g,    '0$1')
+    // Missing space between a digit and an uppercase letter that starts a word
+    // e.g. "123Main" → "123 Main" — happens when OCR merges tokens
+    .replace(/(\d)([A-Z][a-z]{2,})/g, '$1 $2')
+    // Stray period or comma inside a house number: "1,234 Oak" → "1234 Oak"
+    .replace(/\b(\d)[,.](\d{3})\s/g, '$1$2 ');
+}
+
 function parseAddresses(rawText) {
-  const cleaned = rawText
-    .replace(/\r\n/g, '\n').replace(/[|]/g, 'I')
-    .replace(/['']/g, "'").replace(/[""]/g, '"');
-  // Keep lines longer than 2 chars OR pure-digit lines (short house numbers like "15", "5")
+  const cleaned = fixOcrErrors(rawText)
+    .replace(/\r\n/g, '\n').replace(/[|¦]/g, 'I')
+    .replace(/['']/g, "'").replace(/[""]/g, '"')
+    // OCR sometimes reads 0 as O inside zip codes: "4800I" → "48001"
+    .replace(/\b(\d{4})[lI]\b/g, '$10');
+
+  // Keep lines longer than 2 chars OR pure-digit lines (short house numbers)
   const rawLines = cleaned.split('\n').map(l => l.trim())
     .filter(l => l.length > 2 || /^\d{1,5}$/.test(l));
 
-  // ── Strip every line that can't be part of a street address ─────────────
-  // Anything matching ANY of these patterns is thrown away before parsing.
+  // ── Strip lines that can't be part of a street address ──────────────────
   const noiseRe = new RegExp([
-    /^expected\s+by\b/,             // "Expected by 8:00 AM"
-    /^deliver\b/,                   // "Deliver 1 package / item"
-    /\bpackages?\b/,                // lines containing "package"
-    /\bitems?\b/,                   // lines containing "item"
-    /^#\s*[A-Za-z][-–—\d]/,        // "# M-23.3A"  route codes
-    /^itinerary\b/,                 // "Itinerary List"
-    /^route\s*#/,                   // "Route #..."
-    /\d{1,2}:\d{2}/,               // any time string  "8:00", "3:31"
-    /^(AM|PM)$/i,                   // lone AM / PM
-    /^\d{1,3}%$/,                   // battery %
-    /^(5G|LTE|4G|3G|WiFi|WIFI)$/i, // network indicators
-    /^(loading|searching)\b/i,      // loading states
-    /^\W+$/,                        // lines of only symbols / punctuation
-    /^[A-Z]{1,3}\d{1,3}$/,         // short alphanumeric codes e.g. "M23"
+    /^expected\s+by\b/,              // "Expected by 8:00 AM"
+    /^deliver\s+\d/,                 // "Deliver 2 packages" (but NOT "Delivery Rd")
+    /\bpackages?\b/,                 // lines containing "package"
+    /\b\d+\s+items?\b/,             // "3 items" (number + item, not standalone "item")
+    /^#\s*[A-Za-z][-–—\d]/,         // "# M-23.3A" route codes
+    /^itinerary\b/,                  // "Itinerary List"
+    /^route\s*#/,                    // "Route #..."
+    /^\d{1,2}:\d{2}\s*(AM|PM)?$/i,  // standalone time "8:00 AM" (not mid-line)
+    /^(AM|PM)$/i,                    // lone AM / PM
+    /^\d{1,3}%$/,                    // battery %
+    /^(5G|LTE|4G|3G|WiFi|WIFI)$/i,  // network indicators
+    /^(loading|searching)\b/i,       // loading states
+    /^\W+$/,                         // lines of only symbols / punctuation
+    /^[A-Z]{1,3}\d{1,3}$/,          // short alphanumeric codes e.g. "M23"
+    /^(stop|stops?)\s+\d+/i,        // "Stop 3 of 10"
+    /^(\d+\s+of\s+\d+)$/i,          // "3 of 10"
   ].map(r => r.source).join('|'), 'i');
 
   const lines = rawLines.filter(l => !noiseRe.test(l));
 
-  // ── Pre-process: merge a bare house number with the next line when OCR
-  //    splits "15" and "S ELM GROVE RD" onto separate lines ─────────────────
-  const dirStreetRe = /^[NSEWnsew]\s+[A-Za-z]/;
+  // ── Merge bare house number with next line when OCR splits them ──────────
+  const dirStreetRe = /^[NSEWnsew]\.?\s+[A-Za-z]/;
   const mergedLines = [];
   for (let k = 0; k < lines.length; k++) {
-    if (/^\d{1,5}$/.test(lines[k]) && k + 1 < lines.length && dirStreetRe.test(lines[k + 1])) {
+    if (/^\d{1,5}$/.test(lines[k]) && k + 1 < lines.length &&
+        (dirStreetRe.test(lines[k + 1]) || /^[A-Za-z]/.test(lines[k + 1]))) {
       mergedLines.push(lines[k] + ' ' + lines[k + 1]);
-      k++;   // consumed the next line
+      k++;
     } else {
       mergedLines.push(lines[k]);
     }
   }
 
   const found = [];
-  const houseNumRe     = /^\d{1,5}\s+[A-Za-z]/;
-  const aptRe          = /^(apt|unit|suite|ste|#\s*\d|bldg|building|floor|fl|room|rm)\.?\s*\S/i;
-  const cityStateZipRe = /^[A-Za-z][A-Za-z\s\-']{1,30},?\s+[A-Z]{2}\s+\d{5}(-\d{4})?$/;
-  const cityStateRe    = /^[A-Za-z][A-Za-z\s\-']{1,30},?\s+[A-Z]{2}$/;
+  // Allows "1234" or "12345" including ordinals like "12th", "3rd", and leading zero addresses
+  const houseNumRe     = /^\d{1,5}\s+\S/;
+  const aptRe          = /^(apt|unit|suite|ste|#\s*[\w-]+|bldg|building|floor|fl|room|rm)\.?\s*\S/i;
+  const cityStateZipRe = /^[A-Za-z][A-Za-z\s\-'\.]{1,35},?\s+[A-Z]{2}\s+\d{5}(-\d{4})?$/;
+  const cityStateRe    = /^[A-Za-z][A-Za-z\s\-'\.]{1,35},?\s+[A-Z]{2}$/;
   const stateZipRe     = /\b[A-Z]{2}\s+\d{5}(-\d{4})?\b/;
-  const oneLineRe      = /^\d{1,5}\s+.{5,},\s*[A-Za-z\s]+,?\s+[A-Z]{2}(\s+\d{5})?/;
-  const streetKwRe     = /\b(st\.?|ave\.?|blvd\.?|dr\.?|rd\.?|way|ln\.?|ct\.?|pl\.?|pkwy|hwy|highway|route|rte|circle|cir|terr?\.?|trail|trl|loop|court|place|drive|street|avenue|boulevard|lane|road|run|row|ridge|park|point|pointe|bend|crossing|chase|grove|glen|hollow|hill|heights|vista|view|creek|bridge|gate|pass|path|pike|square|sq\.?|commons|village|manor|estates?|xing)\b/i;
+  // Accepts "123 Main St, City, MI 48001" or "123 Main St, City MI 48001" (no comma before state)
+  const oneLineRe      = /^\d{1,5}\s+.{4,},\s*.{2,},?\s+[A-Z]{2}(\s+\d{5})?/;
+  const streetKwRe     = /\b(st\.?|ave\.?|blvd\.?|dr\.?|rd\.?|way|ln\.?|ct\.?|pl\.?|pkwy|hwy|highway|route|rte|circle|cir|terr?\.?|trail|trl|loop|court|place|drive|street|avenue|boulevard|lane|road|run|row|ridge|park|point|pointe|bend|crossing|chase|grove|glen|hollow|hill|heights|vista|view|creek|bridge|gate|pass|path|pike|square|sq\.?|commons|village|manor|estates?|xing|alley|aly|walk|woods|meadow|orchard|spur|trace|trce|landing|island|isle|plaza|mews|cove|cv|bay|bayou|bluff|blf|branch|brch|brook|brk|burg|bypass|byp|canyon|cyn|cape|cpe|causeway|cswy|cliff|clf|club|clb|corner|cor|creek|crk|crescent|cres|dale|dl|dam|dv|divide|dv|expressway|expy|extension|ext|falls|fls|ferry|fry|field|fld|flats|flt|ford|frd|forest|frst|forge|frg|fork|frk|fort|ft|freeway|fwy|gardens|gdns|gateway|gtwy|gorge|grg|harbor|hbr|haven|hvn|heath|hth|highway|hwy|hollow|holw|inlet|inlt|jct|junction|key|ky|knoll|knl|lake|lk|light|lgt|lock|lck|meadows|mdws|mill|ml|mission|msn|mount|mt|mountain|mtn|neck|nck|orchard|orch|oval|ovl|pass|psge|passage|path|pth|pier|pir|pines|pnes|place|plz|plain|pln|plaza|plz|port|prt|prairie|pr|radial|radl|ranch|rnch|rapids|rpds|rest|rst|ridge|rdg|river|rvr|shoal|shl|shore|shr|skyway|skwy|spring|spg|spur|spur|square|sq|station|sta|stream|strm|summit|smt|terrace|ter|trace|trce|track|trak|trail|trl|tunnel|tunl|turnpike|tpke|union|un|valley|vly|viaduct|via|village|vlg|vista|vis|walk|wlk)\b/i;
 
   let i = 0;
   while (i < mergedLines.length) {
     const line = mergedLines[i];
+
+    // Single-line complete address
     if (oneLineRe.test(line)) { found.push(line); i++; continue; }
+
     if (houseNumRe.test(line)) {
       const parts = [line];
       let j = i + 1;
-      while (j < mergedLines.length && j < i + 6) {
+      while (j < mergedLines.length && j < i + 7) {
         const next = mergedLines[j];
         if (noiseRe.test(next)) break;
         if (aptRe.test(next)) { parts.push(next); j++; }
         else if (cityStateZipRe.test(next) || cityStateRe.test(next) || stateZipRe.test(next)) {
           parts.push(next); j++; break;
-        } else if (/^[A-Za-z][A-Za-z\s\-']{1,30}$/.test(next) && next.length < 35) {
+        } else if (/^[A-Za-z][A-Za-z0-9\s\-'\.]{1,40}$/.test(next) && next.length < 45) {
           parts.push(next); j++;
         } else break;
       }
@@ -525,10 +569,35 @@ async function verifyAllAddresses() {
 }
 
 // ─── Geocoding ────────────────────────────────────────────────────────────────
+
+// Build a list of address variants to try, from most to least specific.
+// Handles cases where OCR noise, a missing zip, or an apt number trips Google up.
+function geocodeVariants(address) {
+  const variants = [address];
+
+  // Strip apartment / unit suffix: "123 Main St, Apt 4B, City MI" → "123 Main St, City MI"
+  const noUnit = address.replace(/,?\s*(apt\.?|unit|suite|ste|#\s*[\w-]+|bldg\.?\s*\w*|fl\.?\s*\d+)\s*(?=,|$)/gi, '')
+                        .replace(/,\s*,/g, ',').replace(/,\s*$/g, '').trim();
+  if (noUnit !== address) variants.push(noUnit);
+
+  // Strip zip code: "...MI 48001" → "...MI"
+  const noZip = address.replace(/\s+\d{5}(-\d{4})?(\s*,)?/g, '').trim().replace(/,\s*$/g, '');
+  if (noZip !== address) variants.push(noZip);
+
+  // Strip unit AND zip
+  const noUnitNoZip = noUnit.replace(/\s+\d{5}(-\d{4})?(\s*,)?/g, '').trim().replace(/,\s*$/g, '');
+  if (noUnitNoZip !== noZip && noUnitNoZip !== noUnit) variants.push(noUnitNoZip);
+
+  return [...new Set(variants)]; // deduplicate
+}
+
 async function geocodeAddress(address) {
   if (googleMapsLoaded && window.google?.maps) {
-    try { return await geocodeWithGoogle(address); }
-    catch (e) { console.warn('Google geocode failed, trying Nominatim:', e.message); }
+    for (const variant of geocodeVariants(address)) {
+      try { return await geocodeWithGoogle(variant); }
+      catch (e) { /* try next variant */ }
+    }
+    console.warn('All Google geocode variants failed, trying Nominatim for:', address);
   }
   return geocodeWithNominatim(address);
 }
