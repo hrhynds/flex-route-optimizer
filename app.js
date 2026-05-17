@@ -113,12 +113,48 @@ function loadGoogleMapsScript(key) {
   if (document.getElementById('gmaps-script')) return;
   const s = document.createElement('script');
   s.id  = 'gmaps-script';
-  s.src = `https://maps.googleapis.com/maps/api/js?key=${key}&loading=async&libraries=geocoding,routes&callback=onGoogleMapsReady`;
-  s.async = true; s.defer = true;
+  s.src = `https://maps.googleapis.com/maps/api/js?key=${key}&libraries=geocoding&callback=onGoogleMapsReady`;
+  s.async = true;
+  s.onerror = () => showMapsKeyError('Google Maps failed to load. Your API key may be invalid or restricted.');
   document.head.appendChild(s);
 }
 
-window.onGoogleMapsReady = function () { googleMapsLoaded = true; };
+window.onGoogleMapsReady = function () {
+  googleMapsLoaded = true;
+  const err = document.getElementById('maps-error-banner');
+  if (err) err.remove();
+};
+
+function saveApiKey() {
+  const key = document.getElementById('api-key-input').value.trim();
+  if (!key) return;
+  localStorage.setItem('gmaps_api_key_custom', key);
+  document.getElementById('key-status').textContent = 'Key saved — reloading…';
+  // Remove old script so loadGoogleMapsScript will re-run with new key
+  const old = document.getElementById('gmaps-script');
+  if (old) old.remove();
+  googleMapsLoaded = false;
+  loadGoogleMapsScript(key);
+  setTimeout(() => {
+    if (googleMapsLoaded) {
+      document.getElementById('key-status').textContent = '✓ Google Maps loaded successfully';
+      document.getElementById('maps-error-banner')?.remove();
+    } else {
+      document.getElementById('key-status').textContent = '⚠ Still not loading — double-check your key';
+    }
+  }, 5000);
+}
+
+function showMapsKeyError(msg) {
+  let el = document.getElementById('maps-error-banner');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'maps-error-banner';
+    el.style.cssText = 'background:#3a1a1a;border:1px solid #e05a5a;color:#e05a5a;padding:12px 16px;border-radius:8px;margin:12px 0;font-size:0.85rem;';
+    document.getElementById('app').insertBefore(el, document.getElementById('upload-section'));
+  }
+  el.innerHTML = `⚠ ${msg}<br><a href="#" onclick="document.getElementById('setup-section').style.display='block';return false;" style="color:#e08080;text-decoration:underline;">Enter a different API key →</a>`;
+}
 
 // ─── Delivery Area ────────────────────────────────────────────────────────────
 function loadDeliveryArea() {
@@ -180,7 +216,7 @@ async function getOcrWorker() {
   try {
     ocrWorker = await Tesseract.createWorker('eng', 1, {
       workerPath: 'https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/worker.min.js',
-      langPath:   'https://tessdata.projectnaptha.com/4.0.0_fast',
+      langPath:   'https://cdn.jsdelivr.net/gh/naptha/tessdata@4.0.0_fast',
       logger: m => {
         if (m.status === 'loading tesseract core')       setOcrProgress(10, 'Loading OCR engine…');
         if (m.status === 'loading language traineddata')  setOcrProgress(20, 'Loading language data…');
@@ -387,8 +423,8 @@ function fixOcrErrors(text) {
 
     // ── Fallback: stop number inline with house number ────────────────────────
     // e.g. "19 5487 CINNAMON CT" → "19\n5487 CINNAMON CT"
-    // Matches a 1–2 digit stop followed by a 3–5 digit house number + letter.
-    .replace(/^(\d{1,2})\s+(\d{3,5}\s+[A-Za-z])/gm, '$1\n$2')
+    // Matches a 1–3 digit stop followed by a 3–5 digit house number + letter.
+    .replace(/^(\d{1,3})\s+(\d{3,5}\s+[A-Za-z])/gm, '$1\n$2')
 
     // ── Remaining OCR fixes ───────────────────────────────────────────────────
     .replace(/(\d)([A-Z][a-z]{2,})/g, '$1 $2')
@@ -537,7 +573,7 @@ function renderAddressList() {
     li.className = partial ? 'addr-partial' : '';
     if (stop) li.dataset.stop = stop;
     li.innerHTML = `
-      ${stop ? `<span class="stop-badge" title="Amazon Flex stop #${escHtml(stop)}">#${escHtml(stop)}</span>` : `<span class="addr-num">${i + 1}</span>`}
+      <span class="addr-num">${i + 1}</span>${stop ? `<span class="stop-badge" title="Amazon Flex stop #${escHtml(stop)}">#${escHtml(stop)}</span>` : ''}
       <span class="addr-vstatus ${statusCls}" title="${statusTip}"></span>
       <input type="text" value="${escHtml(addr)}"
              onchange="onAddrEdit(${i}, this)" />
@@ -590,7 +626,14 @@ function saveAddresses() {
 function addAddressManually() {
   const inp = document.getElementById('new-address-input');
   const val = inp.value.trim(); if (!val) return;
-  syncAddressesFromDom(); addresses.push({ address: val, stop: null }); inp.value = '';
+  syncAddressesFromDom();
+  if (addresses.some(a => normalizeKey(a.address) === normalizeKey(val))) {
+    inp.style.outline = '2px solid #e0913a';
+    inp.placeholder = 'Already in the list';
+    setTimeout(() => { inp.style.outline = ''; inp.placeholder = 'Add an address manually…'; }, 1800);
+    return;
+  }
+  addresses.push({ address: val, stop: null }); inp.value = '';
   renderAddressList();
   verifyAddress(val).then(() => renderAddressList());
   scheduleSave();
@@ -605,6 +648,17 @@ async function verifyAddress(addr) {
   try {
     const pt = await geocodeAddress(enriched);
     addrVerified.set(key, { ok: true, lat: pt.lat, lng: pt.lng });
+
+    // Auto-fill zip when geocoder found one and the address is missing it.
+    // Use state+zip pattern check — not just /\d{5}/ which would match 5-digit house numbers.
+    if (pt.zip && !/\b[A-Z]{2}[\s,]+\d{5}\b/.test(enriched)) {
+      const newAddr = enriched.replace(/,?\s*$/, '') + ' ' + pt.zip;
+      const idx = addresses.findIndex(a => normalizeKey(a.address) === key);
+      if (idx !== -1) {
+        addresses[idx].address = newAddr;
+        addrVerified.set(normalizeKey(newAddr), { ok: true, lat: pt.lat, lng: pt.lng });
+      }
+    }
   } catch {
     addrVerified.set(key, { ok: false });
   }
@@ -658,7 +712,8 @@ function geocodeWithGoogle(address) {
     new google.maps.Geocoder().geocode({ address, region: 'us' }, (results, status) => {
       if (status === 'OK' && results.length) {
         const loc = results[0].geometry.location;
-        resolve({ lat: loc.lat(), lng: loc.lng() });
+        const zipComp = results[0].address_components?.find(c => c.types.includes('postal_code'));
+        resolve({ lat: loc.lat(), lng: loc.lng(), zip: zipComp?.short_name || null });
       } else reject(new Error(status));
     });
   });
@@ -667,24 +722,25 @@ function geocodeWithGoogle(address) {
 async function geocodeWithNominatim(address) {
   const H = { 'User-Agent': 'FlexRouteOptimizer/1.0', 'Accept-Language': 'en-US,en' };
   const q = async p => {
-    const res = await fetch(`https://nominatim.openstreetmap.org/search?${new URLSearchParams({ format:'json', limit:'1', countrycodes:'us', ...p })}`, { headers: H });
+    const res = await fetch(`https://nominatim.openstreetmap.org/search?${new URLSearchParams({ format:'json', limit:'1', countrycodes:'us', addressdetails:'1', ...p })}`, { headers: H });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     return res.json();
   };
+  const toResult = r => ({ lat: +r.lat, lng: +r.lon, zip: r.address?.postcode || null });
   let d = await q({ q: address });
-  if (d.length) return { lat: +d[0].lat, lng: +d[0].lon };
+  if (d.length) return toResult(d[0]);
 
   const m = address.match(/^(\d+\s+[^,]+),\s*([^,]+),\s*([A-Z]{2})[\s,]*(\d{5})?/);
   if (m) {
     await sleep(1100);
     d = await q({ street: m[1].trim(), city: m[2].trim(), state: m[3].trim(), ...(m[4] ? { postalcode: m[4] } : {}) });
-    if (d.length) return { lat: +d[0].lat, lng: +d[0].lon };
+    if (d.length) return toResult(d[0]);
     await sleep(1100);
     d = await q({ street: m[1].replace(/^\d+\s+/, ''), city: m[2].trim(), state: m[3].trim() });
-    if (d.length) return { lat: +d[0].lat, lng: +d[0].lon };
+    if (d.length) return toResult(d[0]);
     await sleep(1100);
     d = await q({ city: m[2].trim(), state: m[3].trim() });
-    if (d.length) return { lat: +d[0].lat, lng: +d[0].lon };
+    if (d.length) return toResult(d[0]);
   }
   throw new Error(`Not found: "${address}"`);
 }
@@ -988,8 +1044,18 @@ function darkMapStyles() {
 // ─── Init ─────────────────────────────────────────────────────────────────────
 (function init() {
   document.getElementById('setup-section').style.display = 'none';
-  localStorage.setItem('gmaps_api_key', GMAPS_API_KEY);
-  loadGoogleMapsScript(GMAPS_API_KEY);
+
+  // Use a saved custom key if the user entered one, otherwise use built-in
+  const savedKey = localStorage.getItem('gmaps_api_key_custom') || GMAPS_API_KEY;
+  loadGoogleMapsScript(savedKey);
+
+  // If Maps hasn't loaded after 10s, surface the API key input
+  setTimeout(() => {
+    if (!googleMapsLoaded) {
+      showMapsKeyError('Google Maps is taking too long to load. The API key may be invalid or restricted.');
+    }
+  }, 10000);
+
   loadDeliveryArea();
   const s = localStorage.getItem('start_address');
   if (s) document.getElementById('start-address').value = s;
