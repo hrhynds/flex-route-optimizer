@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, maximum-scale=1.0, user-scalable=no" />
+  <title>Bill Cushion — Daily Set-Aside Tracker</title>
+  <link rel="stylesheet" href="style.css" />
+  <meta name="description" content="Work out what to set aside each day so every bill is fully funded days before it's due." />
+  <meta name="theme-color" content="#0b0f14" media="(prefers-color-scheme: dark)" />
+  <meta name="theme-color" content="#f4f6f9" media="(prefers-color-scheme: light)" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="Bill Cushion" />
+  <link rel="apple-touch-icon" href="icon-192.png" />
+  <link rel="icon" href="icon-192.png" />
+  <link rel="manifest" href="manifest.json" />
+</head>
+<body>
+
+  <div id="app">
+
+    <header class="appbar">
+      <div>
+        <h1>💵 Bill Cushion</h1>
+        <div class="today-label" id="appbar-date">—</div>
+      </div>
+      <button class="icon-btn" id="btn-add-bill" aria-label="Add a bill">＋</button>
+    </header>
+
+    <main>
+      <section class="view active" id="view-today"></section>
+      <section class="view" id="view-bills"></section>
+      <section class="view" id="view-plan"></section>
+      <section class="view" id="view-more"></section>
+    </main>
+
+    <nav class="tabbar" id="tabbar">
+      <button class="tab active" data-view="today"><span class="ti">☀️</span>Today</button>
+      <button class="tab" data-view="bills"><span class="ti">🧾</span>Bills</button>
+      <button class="tab" data-view="plan"><span class="ti">🗓️</span>Plan</button>
+      <button class="tab" data-view="more"><span class="ti">⚙️</span>More</button>
+    </nav>
+
+  </div>
+
+  <div id="sheet-host"></div>
+  <div class="toast" id="toast"><span id="toast-msg"></span></div>
+
+  <script src="app.js"></script>
+</body>
+</html>

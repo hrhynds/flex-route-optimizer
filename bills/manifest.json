@@ -1,0 +1,17 @@
+{
+  "name": "Bill Cushion — Daily Set-Aside Tracker",
+  "short_name": "Bill Cushion",
+  "description": "Know exactly what to set aside each workday so every bill is fully funded days before it is due.",
+  "start_url": "/flex-route-optimizer/bills/",
+  "scope": "/flex-route-optimizer/bills/",
+  "display": "standalone",
+  "background_color": "#0b0f14",
+  "theme_color": "#0b0f14",
+  "orientation": "portrait",
+  "categories": ["finance", "productivity"],
+  "icons": [
+    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}
