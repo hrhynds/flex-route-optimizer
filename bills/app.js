@@ -36,7 +36,8 @@
     { v: 'biweekly', label: 'Every 2 weeks' },
     { v: 'monthly', label: 'Every month' },
     { v: 'quarterly', label: 'Every 3 months' },
-    { v: 'yearly', label: 'Every year' }
+    { v: 'yearly', label: 'Every year' },
+    { v: 'schedule', label: 'A set list of dates' }
   ];
 
   var TEMPLATES = [
@@ -118,7 +119,8 @@
     return {
       version: 1,
       settings: {
-        cushionDays: 5,
+        cushionDays: 6,
+        cushionMode: 'workdays',   // count the cushion in workdays, not calendar days
         countMode: 'workdays',     // 'workdays' = spread over days you actually work
         workdays: [1, 2, 3, 4, 5], // 0 = Sunday
         roundTo: 0.01,             // round the daily ask up to this step
@@ -226,8 +228,33 @@
   function cushionOf(b) {
     return b.cushionDays == null ? state.settings.cushionDays : b.cushionDays;
   }
+
+  /** Walk back n funding days from a date — "6 workdays before it's due". */
+  function backFundingDays(iso, n) {
+    if (n <= 0) return iso;
+    var d = iso, hit = 0;
+    for (var i = 0; i < 600 && hit < n; i++) {
+      d = addDays(d, -1);
+      if (isFundingDay(d)) hit++;
+    }
+    return d;
+  }
+
+  /** The date money must be fully in place by, for a given due date. */
+  function cushionDateFor(dueISO, n) {
+    return state.settings.cushionMode === 'workdays'
+      ? backFundingDays(dueISO, n)
+      : addDays(dueISO, -n);
+  }
+
   /** The date the bill must be 100% funded by. */
-  function targetDate(b) { return addDays(b.dueDate, -cushionOf(b)); }
+  function targetDate(b) { return cushionDateFor(b.dueDate, cushionOf(b)); }
+
+  var unitWord = function () { return state.settings.countMode === 'alldays' ? 'day' : 'workday'; };
+  var cushionWords = function (n) {
+    if (n == null) n = state.settings.cushionDays;
+    return plural(n, state.settings.cushionMode === 'workdays' ? unitWord() : 'day');
+  };
 
   // contribution index, rebuilt when state changes
   var _idx = { rev: -1, byBill: null };
@@ -638,6 +665,17 @@
       case 'monthly': return shiftMonths(b, 1);
       case 'quarterly': return shiftMonths(b, 3);
       case 'yearly': return shiftMonths(b, 12);
+      case 'schedule':
+        var list = (b.scheduleDates || []).slice().sort();
+        for (var i = 0; i < list.length; i++) {
+          if (diffDays(b.dueDate, list[i]) > 0) return list[i];
+        }
+        // list ran out — keep the same rhythm going
+        if (list.length >= 2) {
+          var gap = diffDays(list[list.length - 2], list[list.length - 1]);
+          if (gap > 0) return addDays(b.dueDate, gap);
+        }
+        return addDays(b.dueDate, 14);
       default: return null;
     }
   }
@@ -832,7 +870,7 @@
       '<div class="big">💵</div>' +
       '<h3>Let\'s get your bills covered</h3>' +
       '<p>Add each bill with its amount and due date. This app then tells you exactly what to put aside every workday so each one is fully paid for <strong>' +
-      state.settings.cushionDays + ' days before</strong> it\'s due.</p>' +
+      cushionWords() + ' before</strong> it\'s due.</p>' +
       '<button class="btn primary" data-act="add-bill">＋ Add your first bill</button>' +
       '</div>' +
       '<div class="sep"></div>' +
@@ -1030,13 +1068,19 @@
 
     // cushion control
     html += '<div class="card"><div class="card-title">Safety cushion</div>' +
-      '<p class="small dim mb">Every bill is fully funded this many days <em>before</em> its due date. ' +
+      '<p class="small dim mb">Every bill is fully funded this far <em>before</em> its due date. ' +
       'A bigger cushion means a slightly higher daily amount, but more breathing room.</p>' +
-      '<div class="chip-row">' +
-      [0, 3, 5, 7, 10, 14].map(function (n) {
+      '<div class="chip-row mb">' +
+      [0, 3, 5, 6, 7, 10, 14].map(function (n) {
         return '<button class="chip' + (state.settings.cushionDays === n ? ' on' : '') +
-          '" data-act="set-cushion" data-n="' + n + '">' + n + ' days</button>';
-      }).join('') + '</div></div>';
+          '" data-act="set-cushion" data-n="' + n + '">' + n + '</button>';
+      }).join('') + '</div>' +
+      '<div class="chip-row">' +
+      [['workdays', 'workdays'], ['calendar', 'calendar days']].map(function (m) {
+        return '<button class="chip' + (state.settings.cushionMode === m[0] ? ' on' : '') +
+          '" data-act="set-cushion-mode" data-m="' + m[0] + '">counted in ' + m[1] + '</button>';
+      }).join('') + '</div>' +
+      '<div class="hint mt">Currently <strong>' + cushionWords() + '</strong> ahead of every due date.</div></div>';
 
     host.innerHTML = html;
   }
@@ -1063,10 +1107,15 @@
 
     html += '<div class="card"><div class="card-title">Daily amounts</div>' +
       '<div class="switch-row"><div><div class="sr-label">Safety cushion</div>' +
-      '<div class="sr-hint">Bills are fully funded this many days early.</div></div></div>' +
+      '<div class="sr-hint">Bills are fully funded ' + cushionWords() + ' early.</div></div></div>' +
       '<div class="chip-row mb">' +
-      [0, 3, 5, 7, 10, 14].map(function (n) {
+      [0, 3, 5, 6, 7, 10, 14].map(function (n) {
         return '<button class="chip' + (s.cushionDays === n ? ' on' : '') + '" data-act="set-cushion" data-n="' + n + '">' + n + '</button>';
+      }).join('') + '</div>' +
+      '<div class="chip-row mb">' +
+      [['workdays', 'workdays'], ['calendar', 'calendar days']].map(function (m) {
+        return '<button class="chip' + (s.cushionMode === m[0] ? ' on' : '') +
+          '" data-act="set-cushion-mode" data-m="' + m[0] + '">counted in ' + m[1] + '</button>';
       }).join('') + '</div>' +
       '<div class="switch-row"><div><div class="sr-label">Round the daily ask up to</div>' +
       '<div class="sr-hint">Easier to handle in cash — and it finishes early.</div></div></div>' +
@@ -1082,7 +1131,8 @@
       '<div class="lr-amt">' + money(vault) + '</div></div>' +
       '<div class="list-row"><div><div>Bills tracked</div></div><div class="lr-amt">' + activeBills().length + '</div></div>' +
       '<div class="list-row"><div><div>Days logged</div></div><div class="lr-amt">' +
-      Object.keys(state.days).length + '</div></div></div>';
+      Object.keys(state.days).length + '</div></div>' +
+      '<button class="btn mt" data-act="opening-balance">＋ Money I already have set aside</button></div>';
 
     html += '<div class="card"><div class="card-title">Backup</div>' +
       '<p class="small dim mb">Everything is stored on this device only. Clearing Safari data wipes it — ' +
@@ -1096,9 +1146,9 @@
     html += '<div class="card"><div class="card-title">How the math works</div>' +
       '<p class="small dim">For every bill:</p>' +
       '<p class="small mt" style="background:var(--bg-elev-2);padding:12px;border-radius:10px;line-height:1.6">' +
-      '<strong>Cushion date</strong> = due date − ' + s.cushionDays + ' days<br>' +
-      '<strong>Per day</strong> = money still needed ÷ ' +
-      (s.countMode === 'alldays' ? 'days' : 'workdays') + ' left until the cushion date' +
+      '<strong>Cushion date</strong> = ' + cushionWords() + ' back from the due date<br>' +
+      '<strong>Per ' + unitWord() + '</strong> = money still needed ÷ ' +
+      unitWord() + 's left until the cushion date' +
       '</p>' +
       '<p class="small dim mt">It recalculates every single day from what you\'ve actually banked. ' +
       'Miss a day and tomorrow\'s number goes up just enough to stay on time — you can\'t quietly fall behind. ' +
@@ -1185,10 +1235,16 @@
         return '<option value="' + r.v + '"' + (d.recurrence === r.v ? ' selected' : '') + '>' + r.label + '</option>';
       }).join('') + '</select></div>';
 
+    html += '<div class="field" id="f-sched-wrap" style="display:none"><label>Payment dates</label>' +
+      '<textarea id="f-sched" rows="5" style="font-size:14px" placeholder="2026-09-18&#10;2026-10-02&#10;2026-10-16">' +
+      esc((d.scheduleDates || []).join('\n')) + '</textarea>' +
+      '<div class="hint">One date per line, as YYYY-MM-DD. Each time you mark it paid it moves to the next date on the list. ' +
+      'Handy for a finance plan that debits on your paydays rather than a fixed day of the month.</div></div>';
+
     html += '<div class="field"><label>Cushion for this bill</label><select id="f-cushion">' +
-      '<option value="">Use my default (' + state.settings.cushionDays + ' days early)</option>' +
-      [0, 3, 5, 7, 10, 14, 21].map(function (n) {
-        return '<option value="' + n + '"' + (d.cushionDays === n ? ' selected' : '') + '>' + n + ' days early</option>';
+      '<option value="">Use my default (' + cushionWords() + ' early)</option>' +
+      [0, 3, 5, 6, 7, 10, 14, 21].map(function (n) {
+        return '<option value="' + n + '"' + (d.cushionDays === n ? ' selected' : '') + '>' + cushionWords(n) + ' early</option>';
       }).join('') + '</select>' +
       '<div class="hint" id="f-preview"></div></div>';
 
@@ -1214,7 +1270,7 @@
         var cd = cRaw === '' ? state.settings.cushionDays : +cRaw;
         var out = $('#f-preview', sheet);
         if (!amt || !due) { out.textContent = 'Enter an amount and due date to see the daily number.'; return; }
-        var tgt = addDays(due, -cd);
+        var tgt = cushionDateFor(due, cd);
         var n = countFundingDays(todayISO(), tgt);
         if (n <= 0) {
           out.innerHTML = '⚠️ No ' + (state.settings.countMode === 'alldays' ? 'days' : 'workdays') +
@@ -1226,6 +1282,12 @@
             ', fully funded by ' + fmtDate(tgt) + '.';
         }
       }
+      function syncSchedule() {
+        $('#f-sched-wrap', sheet).style.display = $('#f-rec', sheet).value === 'schedule' ? '' : 'none';
+      }
+      $('#f-rec', sheet).addEventListener('change', syncSchedule);
+      syncSchedule();
+
       ['#f-amount', '#f-due', '#f-cushion'].forEach(function (sel) {
         $(sel, sheet).addEventListener('input', preview);
         $(sel, sheet).addEventListener('change', preview);
@@ -1243,17 +1305,25 @@
         if (!(amount > 0)) return toast('⚠️ Enter an amount over $0');
         if (!due || !/^\d{4}-\d{2}-\d{2}$/.test(due)) return toast('⚠️ Pick a due date');
 
+        var sched = [];
+        if (rec === 'schedule') {
+          sched = ($('#f-sched', sheet).value || '').split(/[\s,]+/)
+            .map(function (x) { return x.trim(); })
+            .filter(function (x) { return /^\d{4}-\d{2}-\d{2}$/.test(x); })
+            .sort();
+        }
+
         if (isNew) {
           state.bills.push({
             id: uid(), name: name, icon: icon, amount: amount, dueDate: due,
-            recurrence: rec, anchorDay: fromISO(due).getDate(),
+            recurrence: rec, scheduleDates: sched, anchorDay: fromISO(due).getDate(),
             cushionDays: cRaw === '' ? null : +cRaw,
             cycle: 0, cycleStart: todayISO(), createdAt: todayISO(),
             archived: false, paidHistory: []
           });
         } else {
           b.name = name; b.icon = icon; b.amount = amount;
-          b.dueDate = due; b.recurrence = rec;
+          b.dueDate = due; b.recurrence = rec; b.scheduleDates = sched;
           b.anchorDay = fromISO(due).getDate();
           b.cushionDays = cRaw === '' ? null : +cRaw;
         }
@@ -1315,6 +1385,14 @@
       '<div class="list-row"><div>Repeats</div><div class="lr-amt">' +
       (RECURRENCE.filter(function (r) { return r.v === b.recurrence; })[0] || { label: '—' }).label + '</div></div>';
 
+    if (b.recurrence === 'schedule' && (b.scheduleDates || []).length) {
+      var upcoming = b.scheduleDates.filter(function (x) { return diffDays(b.dueDate, x) > 0; }).slice(0, 4);
+      if (upcoming.length) {
+        html += '<div class="list-row"><div>Then debits on</div><div class="lr-amt small">' +
+          upcoming.map(function (x) { return fmtDate(x); }).join(' · ') + '</div></div>';
+      }
+    }
+
     html += '<div class="btn-row mt" style="margin-bottom:8px">' +
       '<button class="btn primary" data-act="add-money" data-id="' + b.id + '">＋ Add money</button>' +
       '<button class="btn" data-act="mark-paid" data-id="' + b.id + '">Mark paid</button></div>' +
@@ -1367,7 +1445,7 @@
         if (!ok) { outEl.innerHTML = '⚠️ Enter an amount over $0 and a due date.'; return; }
 
         var cd = cushionOf(b);
-        var tgt = addDays(due, -cd);
+        var tgt = cushionDateFor(due, cd);
         var banked = savedFor(b, todayISO());
         var left = round2(Math.max(0, a - banked));
         var n = countFundingDays(todayISO(), tgt);
@@ -1381,7 +1459,7 @@
           var per = Math.min(left, ceilTo(left / n, state.settings.roundTo));
           outEl.innerHTML = (changed() ? '➜ becomes ' : '➜ ') + '<strong>' + money(per) + ' per ' + unit +
             '</strong> × ' + plural(n, unit) + ', fully funded by <strong>' + fmtDate(tgt, 'dow') +
-            '</strong> (' + cd + ' days before it\'s due).';
+            '</strong> (' + cushionWords(cd) + ' before it\'s due).';
         }
       }
 
@@ -1431,7 +1509,8 @@
       [10, 20, 25, 50, 100].map(function (n) {
         return '<button class="chip" data-add="' + n + '">+$' + n + '</button>';
       }).join('') + '<button class="chip" data-add="clear">clear</button></div>' +
-      '<div class="field"><label>Note (optional)</label><input id="a-note" type="text" placeholder="e.g. Tuesday block"></div>' +
+      '<div class="field"><label>Note (optional)</label><input id="a-note" type="text" value="' +
+      esc(o.note || '') + '" placeholder="e.g. Tuesday block"></div>' +
       '<div id="a-preview" class="hint mb"></div>';
 
     if (o.allowComplete) {
@@ -1799,7 +1878,21 @@
       case 'set-cushion':
         state.settings.cushionDays = +t.dataset.n;
         save(); render();
-        toast('🛡️ Bills now fully funded ' + plural(+t.dataset.n, 'day') + ' early');
+        toast('🛡️ Bills now fully funded ' + cushionWords() + ' early');
+        break;
+
+      case 'set-cushion-mode':
+        state.settings.cushionMode = t.dataset.m === 'workdays' ? 'workdays' : 'calendar';
+        save(); render();
+        toast('🛡️ Cushion now ' + cushionWords() + ' ahead of each due date');
+        break;
+
+      case 'opening-balance':
+        amountSheet({
+          title: 'Money already set aside',
+          sub: 'Anything you have banked for bills already. It goes to the most urgent bills first and lowers every daily amount from here on.',
+          value: '', note: 'Already in the account'
+        });
         break;
 
       case 'set-round':
