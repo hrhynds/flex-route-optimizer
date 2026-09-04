@@ -329,7 +329,7 @@ main { padding: 16px 16px 0; }
 
 .tabbar {
   position: fixed; left: 0; right: 0; bottom: 0; z-index: 50;
-  display: grid; grid-template-columns: repeat(4, 1fr);
+  display: grid; grid-template-columns: repeat(5, 1fr);
   background: color-mix(in srgb, var(--bg) 88%, transparent);
   backdrop-filter: saturate(180%) blur(18px);
   -webkit-backdrop-filter: saturate(180%) blur(18px);
@@ -340,7 +340,8 @@ main { padding: 16px 16px 0; }
   background: none; border: none;
   height: var(--tabbar-h);
   display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px;
-  color: var(--text-faint); font-size: 0.66rem; font-weight: 650;
+  color: var(--text-faint); font-size: 0.6rem; font-weight: 650;
+  padding: 0 2px; letter-spacing: -0.2px;
 }
 .tab .ti { font-size: 1.24rem; line-height: 1; }
 .tab.active { color: var(--green); }
@@ -503,3 +504,129 @@ main { padding: 16px 16px 0; }
 .small { font-size: 0.82rem; }
 .tiny { font-size: 0.74rem; }
 .strike { text-decoration: line-through; opacity: 0.55; }
+
+/* ==========================================================================
+   Business — the daily money chain, charts, and logs
+   ========================================================================== */
+
+/* ---------- the waterfall ---------- */
+
+.flow { margin-top: 2px; }
+.flow-row {
+  display: flex; align-items: baseline; justify-content: space-between; gap: 12px;
+  padding: 9px 0;
+  border-bottom: 1px solid var(--line-soft);
+  font-size: 0.94rem;
+}
+.flow-row:last-child { border-bottom: none; }
+.flow-label { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+.flow-label .fl-sub { font-size: 0.74rem; color: var(--text-faint); }
+.flow-amt { font-variant-numeric: tabular-nums; font-weight: 650; white-space: nowrap; }
+.flow-amt.out { color: var(--text-dim); }
+.flow-row.total {
+  border-top: 2px solid var(--line);
+  border-bottom: none;
+  margin-top: 4px; padding-top: 12px;
+}
+.flow-row.total .flow-label { font-weight: 700; }
+.flow-row.total .flow-amt { font-size: 1.28rem; font-weight: 800; letter-spacing: -0.4px; }
+.flow-row.total.neg .flow-amt { color: var(--red); }
+.flow-row.total.pos .flow-amt { color: var(--green); }
+@media (prefers-color-scheme: light) { .flow-row.total.pos .flow-amt { color: var(--green-dim); } }
+
+/* ---------- bar chart ---------- */
+
+.chart { --chart-h: 132px; }
+.chart-plot {
+  display: flex; align-items: flex-end; gap: 3px;
+  height: var(--chart-h);
+  position: relative;
+  padding-top: 6px;
+}
+.chart-col {
+  flex: 1; min-width: 0;
+  height: 100%;
+  display: flex; flex-direction: column; justify-content: flex-end;
+  position: relative;
+  background: none; border: none; padding: 0;
+}
+.chart-bar {
+  width: 100%;
+  border-radius: 4px 4px 0 0;      /* rounded data-end, anchored to the baseline */
+  background: var(--series-1, #2a78d6);
+  min-height: 2px;
+  transition: height 0.3s ease;
+}
+.chart-bar.zero { background: var(--line); min-height: 2px; }
+.chart-bar.under { background: var(--series-1, #2a78d6); opacity: 0.42; }
+.chart-baseline { height: 1px; background: var(--line); margin-top: 0; }
+.chart-goal {
+  position: absolute; left: 0; right: 0;
+  border-top: 2px dashed var(--text-faint);
+  pointer-events: none;
+}
+.chart-goal span {
+  position: absolute; right: 0; top: -8px;
+  font-size: 0.62rem; font-weight: 700; color: var(--text-faint);
+  background: var(--bg-elev); padding: 0 4px; border-radius: 4px;
+}
+.chart-xaxis { display: flex; gap: 3px; margin-top: 5px; }
+.chart-xaxis div {
+  flex: 1; min-width: 0; text-align: center;
+  font-size: 0.56rem; color: var(--text-faint); font-variant-numeric: tabular-nums;
+}
+.chart-tip {
+  position: absolute; z-index: 5;
+  background: var(--bg-elev-2); border: 1px solid var(--line);
+  border-radius: 9px; padding: 7px 10px;
+  font-size: 0.76rem; white-space: nowrap; pointer-events: none;
+  box-shadow: 0 8px 20px rgba(0,0,0,0.35);
+  transform: translate(-50%, -100%);
+}
+.chart-tip strong { display: block; font-size: 0.86rem; font-variant-numeric: tabular-nums; }
+.chart-legend { display: flex; gap: 14px; flex-wrap: wrap; margin-top: 10px; font-size: 0.72rem; color: var(--text-dim); }
+.chart-legend span { display: inline-flex; align-items: center; gap: 6px; }
+.chart-legend i { width: 11px; height: 11px; border-radius: 3px; display: inline-block; }
+.chart-legend i.dash { height: 0; border-top: 2px dashed var(--text-faint); border-radius: 0; width: 14px; }
+
+/* ---------- composition bar ---------- */
+
+.comp-bar {
+  display: flex; gap: 2px;              /* 2px surface gap between segments */
+  height: 22px; border-radius: 6px; overflow: hidden;
+  background: var(--bg-elev-2);
+}
+.comp-bar i { display: block; height: 100%; }
+.comp-key { margin-top: 12px; }
+.comp-key .list-row { padding: 8px 0; }
+.comp-key .ck { display: inline-flex; align-items: center; gap: 9px; }
+.comp-key .ck i { width: 11px; height: 11px; border-radius: 3px; flex: none; }
+
+/* ---------- log rows ---------- */
+
+.log-row {
+  display: flex; align-items: center; gap: 11px;
+  width: 100%; text-align: left;
+  padding: 11px 0; border-bottom: 1px solid var(--line-soft);
+  background: none; border-left: none; border-right: none; border-top: none;
+  color: inherit;
+}
+.log-row:last-child { border-bottom: none; }
+.log-row:active { opacity: 0.6; }
+.log-ico {
+  width: 34px; height: 34px; border-radius: 10px; flex: none;
+  background: var(--bg-elev-2);
+  display: grid; place-items: center; font-size: 1rem;
+}
+.log-main { flex: 1; min-width: 0; }
+.log-title { font-weight: 600; font-size: 0.95rem; }
+.log-sub { font-size: 0.75rem; color: var(--text-dim); margin-top: 1px; }
+.log-amt { font-weight: 700; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.log-amt.in { color: var(--green); }
+.log-amt.out { color: var(--text-dim); }
+@media (prefers-color-scheme: light) { .log-amt.in { color: var(--green-dim); } }
+
+/* ---------- quick action pair ---------- */
+
+.quick-pair { display: flex; gap: 8px; margin-bottom: 14px; }
+.quick-pair .btn { flex: 1; min-height: 52px; font-size: 0.95rem; }

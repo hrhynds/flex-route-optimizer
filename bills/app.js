@@ -53,6 +53,39 @@
   var ICONS = ['🏠', '🚗', '🛡️', '📱', '⚡', '🌐', '💧', '🔥', '💳', '⛽', '🛒',
                '🏦', '📺', '🏥', '👶', '📦', '🎓', '🐕', '💼', '🧾'];
 
+  // ----- the business side -----
+  var SERVICES = ['Full detail', 'Interior only', 'Exterior only', 'Wash & wax',
+                  'Ceramic coating', 'Headlight restore', 'Engine bay', 'Other'];
+  var EXPENSE_CATS = [
+    { v: 'supplies', label: 'Supplies', icon: '🧴' },
+    { v: 'fuel', label: 'Fuel', icon: '⛽' },
+    { v: 'equipment', label: 'Equipment', icon: '🔧' },
+    { v: 'travel', label: 'Travel', icon: '🚙' },
+    { v: 'marketing', label: 'Marketing', icon: '📣' },
+    { v: 'fees', label: 'Fees', icon: '🏦' },
+    { v: 'other', label: 'Other', icon: '📎' }
+  ];
+  var METHODS = [
+    { v: 'cash', label: 'Cash', icon: '💵' },
+    { v: 'card', label: 'Card', icon: '💳' },
+    { v: 'transfer', label: 'Transfer', icon: '📲' }
+  ];
+  var PARTNER_MODES = [
+    { v: 'none', label: 'Nothing' },
+    { v: 'pctRevenue', label: '% of what comes in', suffix: '%' },
+    { v: 'pctProfit', label: '% of profit after costs', suffix: '%' },
+    { v: 'perJob', label: 'A set amount per job', suffix: '$' },
+    { v: 'perDay', label: 'A set amount per working day', suffix: '$' }
+  ];
+
+  // validated categorical slots (see dataviz palette) — light / dark
+  var VIZ = ['#2a78d6', '#eb6834', '#1baf7a', '#eda100', '#e87ba4'];
+  var VIZ_DARK = ['#3987e5', '#d95926', '#199e70', '#c98500', '#d55181'];
+  function vizColors() {
+    var dark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+    return dark ? VIZ_DARK : VIZ;
+  }
+
   function pad(n) { return String(n).length < 2 ? '0' + n : String(n); }
   function toISO(d) { return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()); }
   function fromISO(s) { var p = String(s).split('-'); return new Date(+p[0], +p[1] - 1, +p[2]); }
@@ -117,8 +150,10 @@
 
   function defaults() {
     return {
-      version: 1,
+      version: 2,
       settings: {
+        partner: { name: 'Logan', mode: 'none', value: 0 },
+        taxRate: 0,
         cushionDays: 6,
         cushionMode: 'workdays',   // count the cushion in workdays, not calendar days
         countMode: 'workdays',     // 'workdays' | 'alldays' | 'estimate'
@@ -132,6 +167,9 @@
       contributions: [],
       days: {},                    // iso -> { completed, skipped, planned, at }
       overrides: { work: [], off: [] },
+      jobs: [],                    // money in  { id, date, amount, service, client, method, note, ts }
+      expenses: [],                // money out { id, date, amount, category, note, ts }
+      payouts: [],                 // settled   { id, date, amount, to: 'partner'|'tax', note, ts }
       meta: { created: todayISO() }
     };
   }
@@ -152,14 +190,22 @@
       if (!d || typeof d !== 'object') return;
       var base = defaults();
       state = {
-        version: 1,
+        version: 2,
         settings: Object.assign(base.settings, d.settings || {}),
         bills: Array.isArray(d.bills) ? d.bills : [],
         contributions: Array.isArray(d.contributions) ? d.contributions : [],
         days: d.days && typeof d.days === 'object' ? d.days : {},
         overrides: Object.assign(base.overrides, d.overrides || {}),
+        jobs: Array.isArray(d.jobs) ? d.jobs : [],
+        expenses: Array.isArray(d.expenses) ? d.expenses : [],
+        payouts: Array.isArray(d.payouts) ? d.payouts : [],
         meta: Object.assign(base.meta, d.meta || {})
       };
+      // a v1 backup has no partner block of its own
+      state.settings.partner = Object.assign(
+        { name: 'Logan', mode: 'none', value: 0 },
+        (d.settings && d.settings.partner) || {}
+      );
       state.bills.forEach(function (b) {
         if (b.cycle == null) b.cycle = 0;
         if (!b.cycleStart) b.cycleStart = b.createdAt || state.meta.created;
@@ -591,6 +637,148 @@
   }
 
   /* ---------------------------------------------------------------------------
+     5b. The business side — what a day actually earns you
+     -----------------------------------------------------------------------------
+     Every day runs the same chain:
+
+        money in
+        − what it cost you to do the work
+        − your partner's cut
+        − tax put by
+        − today's share of the bills
+        = what you keep
+
+     Break-even runs that chain backwards: given today's costs and bills, what
+     does the day have to bring in before you are working for nothing?
+     ------------------------------------------------------------------------ */
+
+  function jobsOn(iso) { return state.jobs.filter(function (j) { return j.date === iso; }); }
+  function expensesOn(iso) { return state.expenses.filter(function (e) { return e.date === iso; }); }
+  function sum(list, key) {
+    return round2(list.reduce(function (a, x) { return a + (+x[key || 'amount'] || 0); }, 0));
+  }
+  function revenueOn(iso) { return sum(jobsOn(iso)); }
+  function costsOn(iso) { return sum(expensesOn(iso)); }
+
+  function partnerRate() { return clamp((state.settings.partner || {}).value || 0, 0, 95) / 100; }
+  function taxRate() { return clamp(state.settings.taxRate || 0, 0, 95) / 100; }
+  function partnerName() { return ((state.settings.partner || {}).name || 'Partner').trim() || 'Partner'; }
+
+  /** What your partner earns on a given day. */
+  function partnerCutOn(iso) {
+    var p = state.settings.partner || {};
+    var rev = revenueOn(iso), cost = costsOn(iso), jobs = jobsOn(iso).length;
+    if (!jobs && p.mode !== 'none') return 0;          // no work, no cut
+    switch (p.mode) {
+      case 'pctRevenue': return round2(rev * partnerRate());
+      case 'pctProfit': return round2(Math.max(0, rev - cost) * partnerRate());
+      case 'perJob': return round2(jobs * (p.value || 0));
+      case 'perDay': return round2(p.value || 0);
+      default: return 0;
+    }
+  }
+
+  /** Tax is taken on what's left after costs and the partner's cut. */
+  function taxOn(iso) {
+    var base = revenueOn(iso) - costsOn(iso) - partnerCutOn(iso);
+    return round2(Math.max(0, base) * taxRate());
+  }
+
+  /** Today's share of the bills — what the cushion plan asks for. */
+  function billShareOn(iso) {
+    var day = simulate(iso, iso)[iso];
+    return day ? day.plannedTotal : 0;
+  }
+
+  /** The whole chain for one day. */
+  function dayMoney(iso) {
+    var rev = revenueOn(iso);
+    var cost = costsOn(iso);
+    var partner = partnerCutOn(iso);
+    var tax = taxOn(iso);
+    var bills = billShareOn(iso);
+    return {
+      date: iso, revenue: rev, costs: cost,
+      grossProfit: round2(rev - cost),
+      partner: partner, tax: tax, bills: bills,
+      jobs: jobsOn(iso).length,
+      takeHome: round2(rev - cost - partner - tax - bills)
+    };
+  }
+
+  /**
+   * What the day has to bring in to cover everything.
+   * Solved per partner rule, because a percentage cut moves with revenue.
+   */
+  function breakEvenOn(iso) {
+    var p = state.settings.partner || {};
+    var cost = costsOn(iso);
+    var bills = billShareOn(iso);
+    var t = taxRate();
+    var afterTax = 1 - t;
+    if (afterTax <= 0.01) return null;
+    var needAfterPartner = bills / afterTax;          // profit needed once tax is out
+
+    switch (p.mode) {
+      case 'pctRevenue': {
+        var r = partnerRate();
+        if (1 - r <= 0.01) return null;
+        return round2((cost + needAfterPartner) / (1 - r));
+      }
+      case 'pctProfit': {
+        var r2 = partnerRate();
+        if (1 - r2 <= 0.01) return null;
+        return round2(cost + needAfterPartner / (1 - r2));
+      }
+      case 'perJob':
+        return round2(cost + (Math.max(1, jobsOn(iso).length) * (p.value || 0)) + needAfterPartner);
+      case 'perDay':
+        return round2(cost + (p.value || 0) + needAfterPartner);
+      default:
+        return round2(cost + needAfterPartner);
+    }
+  }
+
+  /** Running balances: what you still owe your partner, and what tax you're holding. */
+  function owedTo(who) {
+    var earned = 0;
+    var seen = {};
+    var scan = who === 'tax' ? taxOn : partnerCutOn;
+    state.jobs.forEach(function (j) { seen[j.date] = 1; });
+    state.expenses.forEach(function (e) { seen[e.date] = 1; });
+    Object.keys(seen).forEach(function (iso) { earned += scan(iso); });
+    var paid = state.payouts.reduce(function (a, x) {
+      return a + (x.to === who ? (+x.amount || 0) : 0);
+    }, 0);
+    return round2(earned - paid);
+  }
+
+  /** Totals across a date range, inclusive. */
+  function rangeMoney(fromISO, toISO) {
+    var out = { revenue: 0, costs: 0, partner: 0, tax: 0, bills: 0, takeHome: 0, jobs: 0, days: 0, worked: 0 };
+    var span = clamp(diffDays(fromISO, toISO), 0, 400);
+    var iso = fromISO;
+    for (var i = 0; i <= span; i++) {
+      var m = dayMoney(iso);
+      out.revenue += m.revenue; out.costs += m.costs; out.partner += m.partner;
+      out.tax += m.tax; out.bills += m.bills; out.takeHome += m.takeHome;
+      out.jobs += m.jobs; out.days++;
+      if (m.jobs) out.worked++;
+      iso = addDays(iso, 1);
+    }
+    Object.keys(out).forEach(function (k) { out[k] = round2(out[k]); });
+    return out;
+  }
+
+  function monthWindow(iso) {
+    var d = fromISO(iso || todayISO());
+    return {
+      start: toISO(new Date(d.getFullYear(), d.getMonth(), 1)),
+      end: toISO(new Date(d.getFullYear(), d.getMonth() + 1, 0))
+    };
+  }
+
+  /* ---------------------------------------------------------------------------
      6. Actions
      ------------------------------------------------------------------------ */
 
@@ -778,6 +966,7 @@
     $('#appbar-date').textContent =
       fmtDate(t, 'long') + ' · ' + (isFundingDay(t) ? 'workday' : 'day off');
     renderToday();
+    renderBusiness();
     renderBills();
     renderPlan();
     renderMore();
@@ -792,151 +981,198 @@
     var t = todayISO();
     var bills = activeBills();
 
-    if (!bills.length) { host.innerHTML = welcomeHTML(); return; }
-
-    var undated = undatedBills();
-    var undatedBanner = undated.length
-      ? '<div class="banner warn"><span>📅</span><div><strong>' +
-        plural(undated.length, 'bill') + ' still ' + (undated.length === 1 ? 'needs' : 'need') +
-        ' a due date</strong>' + undated.map(function (u) { return esc(u.name); }).join(', ') +
-        ' — not counted in today\'s number yet. Set the date on the Bills tab.</div></div>'
-      : '';
-
-    if (!datedBills().length) {
-      host.innerHTML = undatedBanner +
-        '<div class="empty"><div class="big">📅</div><h3>Add the due dates</h3>' +
-        '<p>Your bills and amounts are in. Give each one a due date and the daily amount appears.</p>' +
-        '<button class="btn primary" data-act="goto-bills">Set due dates</button></div>';
+    if (!bills.length && !state.jobs.length && !state.expenses.length) {
+      host.innerHTML = welcomeHTML();
       return;
     }
 
+    var m = dayMoney(t);
+    var be = breakEvenOn(t);
+    var p = state.settings.partner || {};
     var day = todayPlan();
     var rec = state.days[t];
     var done = rec && rec.completed;
     var actual = dayActual(t);
-    var vault = vaultTotal();
-    var urgentItems = day.remaining.filter(function (i) { return i.urgent; });
     var html = '';
 
-    // hero -----------------------------------------------------------------
-    var cls = 'hero', eyebrow, amount, sub;
-    if (done) {
-      cls += ' is-done';
-      eyebrow = '✓ Day complete';
-      amount = money(actual);
-      sub = actual > 0.004
-        ? 'set aside today · ' + plural(streak(), 'day') + ' streak 🔥'
-        : 'no money needed today · ' + plural(streak(), 'day') + ' streak 🔥';
-    } else if (day.remainingTotal > 0.004) {
-      if (urgentItems.length) cls += ' is-urgent';
-      eyebrow = urgentItems.length ? '⚠️ Needed right now' : 'Set aside today';
-      amount = money(day.remainingTotal);
-      sub = 'across ' + plural(day.remaining.length, 'bill') +
-            (actual > 0.004 ? ' · ' + money(actual) + ' already in today' : '') +
-            slackPhrase();
-    } else if (!day.funding) {
-      cls += ' is-off';
-      eyebrow = 'Day off';
-      var nf = nextFundingDay(addDays(t, 1));
-      var nfp = nf ? simulate(nf, nf)[nf] : null;
-      amount = '$0.00';
-      sub = nf ? 'Next workday ' + fmtDate(nf, 'dow') + ' · ' + money(nfp ? nfp.plannedTotal : 0) + ' due then'
-               : 'No workdays set';
-    } else {
-      cls += ' is-done';
-      eyebrow = '✓ Nothing left today';
-      amount = money(actual);
-      sub = actual > 0.004 ? 'already set aside' : 'every bill is fully funded';
+    var undated = undatedBills();
+    if (undated.length) {
+      html += '<div class="banner warn"><span>📅</span><div><strong>' +
+        plural(undated.length, 'bill') + ' still ' + (undated.length === 1 ? 'needs' : 'need') +
+        ' a due date</strong>' + undated.map(function (u) { return esc(u.name); }).join(', ') +
+        ' — not counted yet. Set the date on the Bills tab.</div></div>';
     }
 
-    html += undatedBanner;
+    /* ---- hero: what today actually leaves you ---- */
+    var cls = 'hero', eyebrow, amount, sub;
+    if (!m.jobs && !m.costs) {
+      cls += ' is-off';
+      eyebrow = 'Nothing logged yet';
+      amount = be != null ? money(be) : '—';
+      sub = be != null
+        ? 'what today needs to bring in to cover everything'
+        : 'log a job to get started';
+    } else if (m.takeHome >= 0) {
+      eyebrow = 'You keep today';
+      amount = money(m.takeHome);
+      sub = money(m.revenue) + ' in across ' + plural(m.jobs, 'job');
+    } else {
+      cls += ' is-urgent';
+      eyebrow = '⚠️ Short today';
+      amount = money(m.takeHome);
+      sub = 'another ' + money(be != null ? Math.max(0, be - m.revenue) : -m.takeHome) +
+        ' would cover everything';
+    }
+
     html += '<div class="' + cls + '">' +
       '<div class="hero-eyebrow">' + eyebrow + '</div>' +
       '<div class="hero-amount">' + amount + '</div>' +
       '<div class="hero-sub">' + sub + '</div>' +
-      '<div class="hero-actions">';
+      '<div class="hero-actions"><div class="btn-row">' +
+      '<button class="btn primary" data-act="add-job">＋ Job</button>' +
+      '<button class="btn subtle" data-act="add-expense">＋ Expense</button>' +
+      '</div></div></div>';
 
-    if (!done) {
-      if (day.remainingTotal > 0.004) {
-        html += '<button class="btn primary" data-act="quick-complete">Set aside ' +
-                money(day.remainingTotal) + ' &amp; complete day</button>';
-        html += '<div class="btn-row">' +
-          '<button class="btn subtle" data-act="custom-amount">Different amount</button>' +
-          '<button class="btn subtle" data-act="skip-day">Couldn\'t today</button>' +
-          '</div>';
-      } else {
-        html += '<button class="btn primary" data-act="complete-only">Mark day complete</button>' +
-                '<button class="btn subtle" data-act="custom-amount">Set aside extra</button>';
-      }
-    } else {
-      html += '<div class="btn-row">' +
-        '<button class="btn subtle" data-act="custom-amount">Add more</button>' +
-        '<button class="btn subtle" data-act="reopen-day">Reopen day</button>' +
-        '</div>';
-    }
-    html += '</div></div>';
-
-    // stats ----------------------------------------------------------------
-    var wk = weekWindow();
-    var wkSim = simulate(wk.start, wk.end);
-    var wkTotal = 0;
-    Object.keys(wkSim).forEach(function (k) {
-      // what the week costs: money already set aside plus what's still owed.
-      // Today contributes both halves, so completing it doesn't zero the figure.
-      wkTotal += wkSim[k].actual + (isPast(k) ? 0 : wkSim[k].remainingTotal);
-    });
-
-    html += '<div class="card tight"><div class="stat-grid">' +
-      '<div class="stat"><div class="stat-val money">' + money0(vault) + '</div><div class="stat-lbl">Banked</div></div>' +
-      '<div class="stat"><div class="stat-val money">' + money0(wkTotal) + '</div><div class="stat-lbl">This week</div></div>' +
-      '<div class="stat"><div class="stat-val">' + streak() + '🔥</div><div class="stat-lbl">Day streak</div></div>' +
-      '</div></div>';
-
-    // per-bill split -------------------------------------------------------
-    var covered = !day.remaining.length;
-    var split = covered ? day.planned : day.remaining;
-    if (split.length) {
-      html += '<div class="card"><div class="card-title">Today\'s split' +
+    /* ---- break-even progress, while the day is still short ---- */
+    if (be != null && m.revenue < be - 0.004 && (m.jobs || m.costs)) {
+      var pctDone = be > 0 ? clamp(m.revenue / be, 0, 1) : 1;
+      html += '<div class="card tight"><div class="card-title">Break-even' +
         '<span class="faint" style="text-transform:none;letter-spacing:0">' +
-        (covered ? 'all covered ✓' : 'tap to log one') + '</span></div>';
+        money(m.revenue) + ' of ' + money(be) + '</span></div>' +
+        '<div class="bar"><div class="bar-fill" style="width:' + pct(pctDone) + '%"></div></div>' +
+        '<div class="small dim mt"><strong>' + money(be - m.revenue) + ' to go</strong> ' +
+        'before today covers its costs, ' + esc(partnerName()) + ', tax and bills.</div></div>';
+    }
+
+    /* ---- the chain ---- */
+    // Only worth showing once there is work on the day — otherwise it would
+    // read as a loss to someone who just tracks bills.
+    if (m.jobs || m.costs) {
+      html += '<div class="card"><div class="card-title">Where today\'s money goes</div><div class="flow">';
+      html += flowRow('Money in', plural(m.jobs, 'job'), m.revenue, '');
+      if (m.costs > 0.004) html += flowRow('What it cost you', plural(expensesOn(t).length, 'expense'), -m.costs, 'out');
+      if (m.partner > 0.004) html += flowRow(esc(partnerName()) + '’s cut', partnerRule(), -m.partner, 'out');
+      if (m.tax > 0.004) html += flowRow('Tax put by', state.settings.taxRate + '%', -m.tax, 'out');
+      if (m.bills > 0.004) {
+        html += flowRow('Bills', plural(day.planned.length, 'bill') +
+          (actual > 0.004 ? ' · ' + money(actual) + ' in' : ''), -m.bills, 'out');
+      }
+      html += '<div class="flow-row total ' + (m.takeHome < 0 ? 'neg' : 'pos') + '">' +
+        '<div class="flow-label">You keep</div>' +
+        '<div class="flow-amt">' + money(m.takeHome) + '</div></div>';
+      html += '</div></div>';
+    }
+
+    /* ---- today's jobs ---- */
+    var jl = jobsOn(t).sort(function (a, b) { return b.ts - a.ts; });
+    if (jl.length) {
+      html += '<div class="card"><div class="card-title">Jobs today' +
+        '<span class="faint" style="text-transform:none;letter-spacing:0">' + money(m.revenue) + '</span></div>';
+      jl.forEach(function (j) {
+        var meth = METHODS.filter(function (x) { return x.v === j.method; })[0];
+        html += '<button class="log-row" data-act="edit-job" data-id="' + j.id + '">' +
+          '<div class="log-ico">' + (meth ? meth.icon : '💵') + '</div>' +
+          '<div class="log-main"><div class="log-title">' + esc(j.service || 'Job') + '</div>' +
+          '<div class="log-sub">' + (j.client ? esc(j.client) + ' · ' : '') +
+          (meth ? meth.label : '') + (j.note ? ' · ' + esc(j.note) : '') + '</div></div>' +
+          '<div class="log-amt in">+' + money(j.amount) + '</div></button>';
+      });
+      html += '</div>';
+    }
+
+    /* ---- today's costs ---- */
+    var el = expensesOn(t).sort(function (a, b) { return b.ts - a.ts; });
+    if (el.length) {
+      html += '<div class="card"><div class="card-title">Spent today' +
+        '<span class="faint" style="text-transform:none;letter-spacing:0">' + money(m.costs) + '</span></div>';
+      el.forEach(function (e) {
+        var cat = EXPENSE_CATS.filter(function (x) { return x.v === e.category; })[0];
+        html += '<button class="log-row" data-act="edit-expense" data-id="' + e.id + '">' +
+          '<div class="log-ico">' + (cat ? cat.icon : '📎') + '</div>' +
+          '<div class="log-main"><div class="log-title">' + (cat ? cat.label : 'Other') + '</div>' +
+          '<div class="log-sub">' + (e.note ? esc(e.note) : relDay(e.date)) + '</div></div>' +
+          '<div class="log-amt out">−' + money(e.amount) + '</div></button>';
+      });
+      html += '</div>';
+    }
+
+    /* ---- the bill set-aside, still the thing that has to happen ---- */
+    if (bills.length && datedBills().length) {
+      html += '<div class="card"><div class="card-title">Bill money' +
+        '<span class="faint" style="text-transform:none;letter-spacing:0" id="bill-state">' +
+        (done ? 'day complete ✓' : (day.remainingTotal > 0.004 ? 'to set aside' : 'all covered ✓')) +
+        '</span></div>' +
+        '<div style="display:flex;align-items:baseline;justify-content:space-between;gap:10px;margin-bottom:10px">' +
+        '<div class="money" id="bill-ask" style="font-size:1.6rem;font-weight:800;letter-spacing:-0.6px">' +
+        money(day.remainingTotal) + '</div>' +
+        '<div class="small dim" id="bill-slack">' +
+        (slackPhrase().replace(/^ · /, '') || plural(day.remaining.length, 'bill')) + '</div></div>';
+
+      var split = day.remaining.length ? day.remaining : day.planned;
       split.forEach(function (it) {
         var b = billById(it.billId);
         if (!b) return;
-        var s = statusOf(b);
+        var st = statusOf(b);
+        var covered = !day.remaining.length;
         html += '<button class="split-row" data-act="pay-one" data-id="' + b.id + '" data-amt="' + it.amount + '" ' +
           'style="width:100%;background:none;border:none;border-bottom:1px solid var(--line-soft);text-align:left">' +
-          '<div class="split-main">' +
-          '<div class="split-name">' + esc(b.icon || '🧾') + ' ' + esc(b.name) +
+          '<div class="split-main"><div class="split-name">' + esc(b.icon || '🧾') + ' ' + esc(b.name) +
           (it.urgent ? ' <span class="pill urgent">now</span>' : '') + '</div>' +
-          '<div class="split-note">' + money(s.saved) + ' of ' + money(b.amount) +
-          ' · fully funded by ' + fmtDate(s.target) + '</div>' +
-          '</div>' +
+          '<div class="split-note">' + money(st.saved) + ' of ' + money(b.amount) +
+          ' · by ' + fmtDate(st.target) + '</div></div>' +
           '<div class="split-amt' + (covered ? ' zero' : '') + '">' +
-          (covered ? '✓ ' : '') + money(it.amount) + '</div>' +
-          '</button>';
+          (covered ? '✓ ' : '') + money(it.amount) + '</div></button>';
       });
-      html += '</div>';
+
+      html += '<div class="mt">';
+      if (!done) {
+        if (day.remainingTotal > 0.004) {
+          html += '<button class="btn primary" data-act="quick-complete">Set aside ' +
+            money(day.remainingTotal) + ' &amp; complete day</button>' +
+            '<div class="btn-row mt"><button class="btn" data-act="custom-amount">Different amount</button>' +
+            '<button class="btn" data-act="skip-day">Couldn\'t today</button></div>';
+        } else {
+          html += '<button class="btn primary" data-act="complete-only">Mark day complete</button>';
+        }
+      } else {
+        html += '<div class="btn-row"><button class="btn" data-act="custom-amount">Add more</button>' +
+          '<button class="btn" data-act="reopen-day">Reopen day</button></div>';
+      }
+      html += '</div></div>';
     }
 
-    // recent ---------------------------------------------------------------
-    var recent = state.contributions.slice().sort(function (a, b) { return b.ts - a.ts; }).slice(0, 6);
-    if (recent.length) {
-      html += '<div class="card"><div class="card-title">Recent activity</div>';
-      recent.forEach(function (c) {
-        var b = c.billId === BUFFER_ID ? null : billById(c.billId);
-        html += '<div class="list-row"><div><div>' +
-          (b ? esc(b.icon || '🧾') + ' ' + esc(b.name) : '💰 Extra buffer') + '</div>' +
-          '<div class="lr-sub">' + fmtDate(c.date, 'dow') + ' · ' + relDay(c.date) +
-          (c.note ? ' · ' + esc(c.note) : '') + '</div></div>' +
-          '<div class="lr-amt">+' + money(c.amount) + '</div></div>';
-      });
-      html += '</div>';
-    }
+    /* ---- headline numbers ---- */
+    var wk = weekWindow();
+    var w = rangeMoney(wk.start, wk.end);
+    html += '<div class="card tight"><div class="stat-grid">' +
+      '<div class="stat"><div class="stat-val money">' + money0(w.revenue) + '</div><div class="stat-lbl">In this week</div></div>' +
+      '<div class="stat"><div class="stat-val money">' + money0(w.takeHome) + '</div><div class="stat-lbl">Kept</div></div>' +
+      '<div class="stat"><div class="stat-val">' + streak() + '🔥</div><div class="stat-lbl">Day streak</div></div>' +
+      '</div></div>';
 
     host.innerHTML = html;
   }
 
-  /** The tightest bill's slack, phrased for the hero line. */
+  function flowRow(label, sub, amount, cls) {
+    return '<div class="flow-row"><div class="flow-label">' + label +
+      (sub ? '<span class="fl-sub">' + sub + '</span>' : '') + '</div>' +
+      '<div class="flow-amt ' + (cls || '') + '">' +
+      (amount < 0 ? '−' + money(-amount) : money(amount)) + '</div></div>';
+  }
+
+  /** A short phrase describing the partner arrangement. */
+  function partnerRule() {
+    var p = state.settings.partner || {};
+    switch (p.mode) {
+      case 'pctRevenue': return p.value + '% of takings';
+      case 'pctProfit': return p.value + '% of profit';
+      case 'perJob': return money(p.value) + ' a job';
+      case 'perDay': return money(p.value) + ' a day';
+      default: return '';
+    }
+  }
+
+
   function tightestSlack() {
     var list = sortedStatuses().filter(function (s) { return s.remaining > 0.004; });
     if (!list.length) return null;
@@ -955,10 +1191,12 @@
     return '<div class="card">' +
       '<div class="empty">' +
       '<div class="big">💵</div>' +
-      '<h3>Let\'s get your bills covered</h3>' +
-      '<p>Add each bill with its amount and due date. This app then tells you exactly what to put aside every workday so each one is fully paid for <strong>' +
-      cushionWords() + ' before</strong> it\'s due.</p>' +
-      '<button class="btn primary" data-act="add-bill">＋ Add your first bill</button>' +
+      '<h3>Money in, money out, money kept</h3>' +
+      '<p>Log what a job pays and what the day costs. Add your bills and it works out what to ' +
+      'put aside each day so every one is covered <strong>' + cushionWords() + ' before</strong> ' +
+      'it\'s due — then tells you what is genuinely yours to keep.</p>' +
+      '<button class="btn primary" data-act="add-job">＋ Log a job</button>' +
+      '<button class="btn mt" data-act="add-bill">＋ Add a bill</button>' +
       '<button class="btn mt" data-act="import">📋 Paste a setup code</button>' +
       '</div>' +
       '<div class="sep"></div>' +
@@ -1075,6 +1313,210 @@
       (s.key === 'behind' ? '<span>· <strong>' + money(s.shortfall) + ' behind pace</strong></span>' : '') +
       '</div></button>';
     return h;
+  }
+
+  /* ---- Business ----------------------------------------------------------- */
+
+  function renderBusiness() {
+    var host = $('#view-business');
+    var t = todayISO();
+
+    if (!state.jobs.length && !state.expenses.length) {
+      host.innerHTML = '<div class="empty"><div class="big">📈</div><h3>No work logged yet</h3>' +
+        '<p>Log what a job brought in and what the day cost you. Everything here fills in from that.</p>' +
+        '<button class="btn primary" data-act="add-job">＋ Log a job</button>' +
+        '<button class="btn mt" data-act="add-expense">＋ Log an expense</button></div>';
+      return;
+    }
+
+    var mw = monthWindow(t);
+    var mon = rangeMoney(mw.start, t);            // month so far
+    var html = '';
+
+    /* headline */
+    html += '<div class="card tight"><div class="card-title">' + MON_LONG[fromISO(t).getMonth()] + ' so far</div>' +
+      '<div class="stat-grid">' +
+      '<div class="stat"><div class="stat-val money">' + money0(mon.revenue) + '</div><div class="stat-lbl">Money in</div></div>' +
+      '<div class="stat"><div class="stat-val money">' + money0(mon.takeHome) + '</div><div class="stat-lbl">You kept</div></div>' +
+      '<div class="stat"><div class="stat-val">' + mon.jobs + '</div><div class="stat-lbl">Jobs</div></div>' +
+      '</div>';
+    if (mon.worked) {
+      html += '<div class="list-row" style="margin-top:6px"><div><div>Average working day</div>' +
+        '<div class="lr-sub">' + plural(mon.worked, 'day') + ' worked · ' +
+        money(mon.jobs ? mon.revenue / mon.jobs : 0) + ' a job</div></div>' +
+        '<div class="lr-amt">' + money(mon.revenue / mon.worked) + '</div></div>';
+    }
+    html += '</div>';
+
+    /* ---- 14 days: what came in, against what a day needs ---- */
+    html += chartHTML(14);
+
+    /* ---- where the month's money went ---- */
+    var kept = Math.max(0, mon.takeHome);
+    var segs = [
+      { label: 'Costs', v: mon.costs },
+      { label: esc(partnerName()), v: mon.partner },
+      { label: 'Tax', v: mon.tax },
+      { label: 'Bills', v: mon.bills },
+      { label: 'You kept', v: kept }
+    ].filter(function (x) { return x.v > 0.004; });
+    var segTotal = segs.reduce(function (a, x) { return a + x.v; }, 0);
+    var cols = vizColors();
+
+    if (segTotal > 0.004) {
+      html += '<div class="card"><div class="card-title">Where the money went</div>' +
+        '<div class="comp-bar">' +
+        segs.map(function (x, i) {
+          return '<i style="width:' + (x.v / segTotal * 100).toFixed(2) + '%;background:' + cols[i % cols.length] + '"></i>';
+        }).join('') + '</div>' +
+        '<div class="comp-key">' +
+        segs.map(function (x, i) {
+          return '<div class="list-row"><div class="ck"><i style="background:' + cols[i % cols.length] + '"></i>' +
+            x.label + '</div><div class="lr-amt">' + money(x.v) +
+            ' <span class="faint tiny">' + Math.round(x.v / segTotal * 100) + '%</span></div></div>';
+        }).join('') + '</div>';
+      if (mon.takeHome < -0.004) {
+        html += '<div class="banner bad mt"><span>⚠️</span><div><strong>' + money(-mon.takeHome) + ' short this month</strong>' +
+          'Costs, ' + esc(partnerName()) + ', tax and bills come to more than has come in.</div></div>';
+      }
+      html += '</div>';
+    }
+
+    /* ---- what you owe ---- */
+    var owedPartner = owedTo('partner');
+    var heldTax = owedTo('tax');
+    if ((state.settings.partner || {}).mode !== 'none' || taxRate() > 0) {
+      html += '<div class="card"><div class="card-title">Money that isn\'t yours</div>';
+      if ((state.settings.partner || {}).mode !== 'none') {
+        html += '<div class="list-row"><div><div>Owed to ' + esc(partnerName()) + '</div>' +
+          '<div class="lr-sub">' + partnerRule() + '</div></div>' +
+          '<div class="lr-amt">' + money(owedPartner) + '</div></div>' +
+          '<button class="btn mt" data-act="pay-partner">Record a payment to ' + esc(partnerName()) + '</button>';
+      }
+      if (taxRate() > 0) {
+        html += '<div class="list-row" style="margin-top:10px"><div><div>Tax being held</div>' +
+          '<div class="lr-sub">' + state.settings.taxRate + '% of profit</div></div>' +
+          '<div class="lr-amt">' + money(heldTax) + '</div></div>' +
+          '<button class="btn mt" data-act="pay-tax">Record a tax payment</button>';
+      }
+      html += '</div>';
+    }
+
+    /* ---- what sells ---- */
+    var byService = {};
+    state.jobs.forEach(function (j) {
+      var k = j.service || 'Other';
+      byService[k] = (byService[k] || 0) + (+j.amount || 0);
+    });
+    var svc = Object.keys(byService).map(function (k) { return { k: k, v: byService[k] }; })
+      .sort(function (a, b) { return b.v - a.v; }).slice(0, 6);
+    if (svc.length) {
+      var svcMax = svc[0].v;
+      html += '<div class="card"><div class="card-title">Best earners</div>';
+      svc.forEach(function (x) {
+        html += '<div style="padding:8px 0">' +
+          '<div style="display:flex;justify-content:space-between;gap:10px;font-size:0.9rem">' +
+          '<span>' + esc(x.k) + '</span><span class="lr-amt">' + money(x.v) + '</span></div>' +
+          '<div class="bar" style="margin-top:6px"><div class="bar-fill" style="width:' +
+          (x.v / svcMax * 100).toFixed(1) + '%;background:' + cols[0] + '"></div></div></div>';
+      });
+      html += '</div>';
+    }
+
+    /* ---- what it costs ---- */
+    var byCat = {};
+    state.expenses.forEach(function (e) {
+      byCat[e.category || 'other'] = (byCat[e.category || 'other'] || 0) + (+e.amount || 0);
+    });
+    var cats = Object.keys(byCat).map(function (k) { return { k: k, v: byCat[k] }; })
+      .sort(function (a, b) { return b.v - a.v; });
+    if (cats.length) {
+      var catMax = cats[0].v;
+      html += '<div class="card"><div class="card-title">What it costs you</div>';
+      cats.forEach(function (x) {
+        var cat = EXPENSE_CATS.filter(function (c) { return c.v === x.k; })[0];
+        html += '<div style="padding:8px 0">' +
+          '<div style="display:flex;justify-content:space-between;gap:10px;font-size:0.9rem">' +
+          '<span>' + (cat ? cat.icon + ' ' + cat.label : esc(x.k)) + '</span>' +
+          '<span class="lr-amt">' + money(x.v) + '</span></div>' +
+          '<div class="bar" style="margin-top:6px"><div class="bar-fill" style="width:' +
+          (x.v / catMax * 100).toFixed(1) + '%;background:' + cols[1] + '"></div></div></div>';
+      });
+      html += '</div>';
+    }
+
+    /* ---- day by day ---- */
+    var seen = {};
+    state.jobs.forEach(function (j) { seen[j.date] = 1; });
+    state.expenses.forEach(function (e) { seen[e.date] = 1; });
+    var dayList = Object.keys(seen).sort().reverse().slice(0, 14);
+    if (dayList.length) {
+      html += '<div class="card"><div class="card-title">Day by day</div>';
+      dayList.forEach(function (iso) {
+        var d = dayMoney(iso);
+        html += '<button class="log-row" data-act="open-day" data-date="' + iso + '">' +
+          '<div class="log-ico">' + (d.takeHome >= 0 ? '✅' : '⚠️') + '</div>' +
+          '<div class="log-main"><div class="log-title">' + fmtDate(iso, 'dow') + '</div>' +
+          '<div class="log-sub">' + money(d.revenue) + ' in · ' + plural(d.jobs, 'job') +
+          (d.costs > 0.004 ? ' · ' + money(d.costs) + ' costs' : '') + '</div></div>' +
+          '<div class="log-amt ' + (d.takeHome >= 0 ? 'in' : 'out') + '">' + money(d.takeHome) + '</div></button>';
+      });
+      html += '</div>';
+    }
+
+    host.innerHTML = html;
+  }
+
+  /**
+   * Money in per day against what a day has to bring in.
+   * One series, so no legend box is needed for the bars themselves — the
+   * dashed line is the only other mark and it is labelled.
+   */
+  function chartHTML(days) {
+    var t = todayISO();
+    var start = addDays(t, -(days - 1));
+    var rows = [], max = 0;
+    for (var i = 0, iso = start; i < days; i++, iso = addDays(iso, 1)) {
+      var rev = revenueOn(iso);
+      rows.push({ iso: iso, rev: rev, be: breakEvenOn(iso), m: dayMoney(iso) });
+      if (rev > max) max = rev;
+    }
+    // The line is what a day has to make *now* — averaging past days when there
+    // were no bills yet would drag it down to something meaningless.
+    var goal = breakEvenOn(t) || 0;
+    if (goal > max) max = goal;
+    if (max <= 0) return '';
+    max = max * 1.12;
+
+    var cols = vizColors();
+    var html = '<div class="card"><div class="card-title">Last ' + days + ' days' +
+      '<span class="faint" style="text-transform:none;letter-spacing:0">money in</span></div>' +
+      '<div class="chart"><div class="chart-plot" id="chart-plot">';
+
+    if (goal > 0) {
+      html += '<div class="chart-goal" style="bottom:' + (goal / max * 100).toFixed(2) + '%">' +
+        '<span>' + money0(goal) + '</span></div>';
+    }
+    rows.forEach(function (r) {
+      var h = max > 0 ? (r.rev / max * 100) : 0;
+      var under = r.rev > 0 && r.be != null && r.rev < r.be;
+      html += '<button class="chart-col" data-act="chart-day" data-date="' + r.iso + '" ' +
+        'aria-label="' + fmtDate(r.iso) + ': ' + money(r.rev) + ' in">' +
+        '<div class="chart-bar' + (r.rev <= 0 ? ' zero' : (under ? ' under' : '')) + '" ' +
+        'style="height:' + Math.max(h, r.rev > 0 ? 2 : 1).toFixed(2) + '%;' +
+        (r.rev > 0 ? 'background:' + cols[0] : '') + '"></div></button>';
+    });
+    html += '</div><div class="chart-baseline"></div><div class="chart-xaxis">' +
+      rows.map(function (r, i) {
+        return '<div>' + (i % 2 === 0 || i === rows.length - 1 ? fromISO(r.iso).getDate() : '') + '</div>';
+      }).join('') + '</div>';
+
+    html += '<div class="chart-legend">' +
+      '<span><i style="background:' + cols[0] + '"></i>money in</span>' +
+      '<span><i style="background:' + cols[0] + ';opacity:.42"></i>under break-even</span>' +
+      (goal > 0 ? '<span><i class="dash"></i>break-even today, ' + money0(goal) + '</span>' : '') +
+      '</div></div></div>';
+    return html;
   }
 
   /* ---- Plan -------------------------------------------------------------- */
@@ -1198,6 +1640,17 @@
     var host = $('#view-more');
     var s = state.settings;
     var html = '';
+
+    var pp = s.partner || {};
+    html += '<div class="card"><div class="card-title">Splits &amp; tax</div>' +
+      '<div class="list-row"><div><div>' +
+      (pp.mode === 'none' ? 'Nobody takes a cut' : esc(pp.name || 'Partner') + '\'s cut') + '</div>' +
+      '<div class="lr-sub">' + (pp.mode === 'none' ? 'Everything after costs is yours' : partnerRule()) + '</div></div>' +
+      '<div class="lr-amt">' + (pp.mode === 'none' ? '—' : money(owedTo('partner')) + '<div class="lr-sub" style="text-align:right;font-weight:500">owed</div>') + '</div></div>' +
+      '<div class="list-row"><div><div>Tax put by</div>' +
+      '<div class="lr-sub">' + (s.taxRate ? s.taxRate + '% of profit' : 'Not set aside') + '</div></div>' +
+      '<div class="lr-amt">' + (s.taxRate ? money(owedTo('tax')) + '<div class="lr-sub" style="text-align:right;font-weight:500">held</div>' : '—') + '</div></div>' +
+      '<button class="btn mt" data-act="business-setup">Change splits &amp; tax</button></div>';
 
     html += '<div class="card"><div class="card-title">Your work schedule</div>' +
       '<p class="small dim mb">How your earning days fall decides what each day has to carry.</p>' +
@@ -1741,6 +2194,271 @@
     });
   }
 
+  /* ---- Logging work and costs -------------------------------------------- */
+
+  function jobSheet(job, dateISO) {
+    var isNew = !job;
+    var d = job || { amount: '', service: SERVICES[0], client: '', method: 'cash',
+                     date: dateISO || todayISO(), note: '' };
+
+    var html = '<h2>' + (isNew ? 'Log a job' : 'Edit job') + '</h2>' +
+      '<div class="sheet-sub">What the job brought in.</div>' +
+      '<div class="field"><label>Amount</label>' +
+      '<input id="j-amt" type="text" inputmode="decimal" value="' + (d.amount === '' ? '' : d.amount) + '" placeholder="0.00"></div>' +
+      '<div class="chip-row mb" id="j-quick">' +
+      [40, 60, 80, 120, 150, 200].map(function (n) {
+        return '<button type="button" class="chip" data-set="' + n + '">$' + n + '</button>';
+      }).join('') + '</div>' +
+      '<div class="field"><label>Service</label><select id="j-service">' +
+      SERVICES.map(function (x) {
+        return '<option value="' + esc(x) + '"' + (d.service === x ? ' selected' : '') + '>' + esc(x) + '</option>';
+      }).join('') + '</select></div>' +
+      '<div class="field"><label>Paid by</label><div class="chip-row" id="j-method">' +
+      METHODS.map(function (x) {
+        return '<button type="button" class="chip' + (d.method === x.v ? ' on' : '') +
+          '" data-m="' + x.v + '">' + x.icon + ' ' + x.label + '</button>';
+      }).join('') + '</div></div>' +
+      '<div class="field-row">' +
+      '<div class="field"><label>Customer (optional)</label>' +
+      '<input id="j-client" type="text" value="' + esc(d.client || '') + '" placeholder="Name" autocomplete="off"></div>' +
+      '<div class="field"><label>Date</label><input id="j-date" type="date" value="' + esc(d.date) + '"></div>' +
+      '</div>' +
+      '<div class="field"><label>Note (optional)</label>' +
+      '<input id="j-note" type="text" value="' + esc(d.note || '') + '" placeholder="e.g. tipped $20"></div>' +
+      '<button class="btn primary" id="j-save" style="margin-bottom:8px">' +
+      (isNew ? 'Log it' : 'Save changes') + '</button>';
+    if (!isNew) html += '<button class="btn danger" id="j-del" style="margin-bottom:8px">Delete this job</button>';
+    html += '<button class="btn ghost" data-act="close-sheet">Cancel</button>';
+
+    openSheet(html, function (sheet) {
+      var method = d.method;
+      $$('#j-method .chip', sheet).forEach(function (c) {
+        c.addEventListener('click', function () {
+          method = c.dataset.m;
+          $$('#j-method .chip', sheet).forEach(function (x) { x.classList.remove('on'); });
+          c.classList.add('on');
+        });
+      });
+      $$('#j-quick .chip', sheet).forEach(function (c) {
+        c.addEventListener('click', function () { $('#j-amt', sheet).value = c.dataset.set; });
+      });
+
+      $('#j-save', sheet).addEventListener('click', function () {
+        var amt = round2(parseFloat($('#j-amt', sheet).value));
+        var date = $('#j-date', sheet).value;
+        if (!(amt > 0)) return toast('⚠️ Enter what the job paid');
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return toast('⚠️ Pick a date');
+
+        var rec = {
+          id: job ? job.id : uid(), date: date, amount: amt,
+          service: $('#j-service', sheet).value,
+          client: $('#j-client', sheet).value.trim(),
+          method: method, note: $('#j-note', sheet).value.trim(),
+          ts: job ? job.ts : Date.now()
+        };
+        if (job) {
+          state.jobs = state.jobs.map(function (x) { return x.id === job.id ? rec : x; });
+        } else {
+          state.jobs.push(rec);
+        }
+        save(); closeSheet(); render();
+        var m = dayMoney(date);
+        toast('✅ ' + money(amt) + ' logged · ' +
+          (m.takeHome >= 0 ? money(m.takeHome) + ' kept' : money(-m.takeHome) + ' short') +
+          ' on ' + fmtDate(date));
+      });
+
+      if (!isNew) {
+        $('#j-del', sheet).addEventListener('click', function () {
+          var gone = job;
+          state.jobs = state.jobs.filter(function (x) { return x.id !== job.id; });
+          save(); closeSheet(); render();
+          lastUndo = { fn: function () { state.jobs.push(gone); save(); render(); } };
+          toast('🗑️ Job removed', 'Undo');
+        });
+      }
+      setTimeout(function () { if (isNew) $('#j-amt', sheet).focus(); }, 220);
+    });
+  }
+
+  function expenseSheet(exp, dateISO) {
+    var isNew = !exp;
+    var d = exp || { amount: '', category: 'supplies', date: dateISO || todayISO(), note: '' };
+
+    var html = '<h2>' + (isNew ? 'Log an expense' : 'Edit expense') + '</h2>' +
+      '<div class="sheet-sub">What the work cost you.</div>' +
+      '<div class="field"><label>Amount</label>' +
+      '<input id="e-amt" type="text" inputmode="decimal" value="' + (d.amount === '' ? '' : d.amount) + '" placeholder="0.00"></div>' +
+      '<div class="field"><label>What for</label><div class="chip-row" id="e-cat">' +
+      EXPENSE_CATS.map(function (c) {
+        return '<button type="button" class="chip' + (d.category === c.v ? ' on' : '') +
+          '" data-c="' + c.v + '">' + c.icon + ' ' + c.label + '</button>';
+      }).join('') + '</div></div>' +
+      '<div class="field"><label>Date</label><input id="e-date" type="date" value="' + esc(d.date) + '"></div>' +
+      '<div class="field"><label>Note (optional)</label>' +
+      '<input id="e-note" type="text" value="' + esc(d.note || '') + '" placeholder="e.g. wax + towels"></div>' +
+      '<button class="btn primary" id="e-save" style="margin-bottom:8px">' +
+      (isNew ? 'Log it' : 'Save changes') + '</button>';
+    if (!isNew) html += '<button class="btn danger" id="e-del" style="margin-bottom:8px">Delete this expense</button>';
+    html += '<button class="btn ghost" data-act="close-sheet">Cancel</button>';
+
+    openSheet(html, function (sheet) {
+      var cat = d.category;
+      $$('#e-cat .chip', sheet).forEach(function (c) {
+        c.addEventListener('click', function () {
+          cat = c.dataset.c;
+          $$('#e-cat .chip', sheet).forEach(function (x) { x.classList.remove('on'); });
+          c.classList.add('on');
+        });
+      });
+
+      $('#e-save', sheet).addEventListener('click', function () {
+        var amt = round2(parseFloat($('#e-amt', sheet).value));
+        var date = $('#e-date', sheet).value;
+        if (!(amt > 0)) return toast('⚠️ Enter what it cost');
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return toast('⚠️ Pick a date');
+
+        var rec = {
+          id: exp ? exp.id : uid(), date: date, amount: amt, category: cat,
+          note: $('#e-note', sheet).value.trim(), ts: exp ? exp.ts : Date.now()
+        };
+        if (exp) {
+          state.expenses = state.expenses.map(function (x) { return x.id === exp.id ? rec : x; });
+        } else {
+          state.expenses.push(rec);
+        }
+        save(); closeSheet(); render();
+        toast('✅ ' + money(amt) + ' expense logged');
+      });
+
+      if (!isNew) {
+        $('#e-del', sheet).addEventListener('click', function () {
+          var gone = exp;
+          state.expenses = state.expenses.filter(function (x) { return x.id !== exp.id; });
+          save(); closeSheet(); render();
+          lastUndo = { fn: function () { state.expenses.push(gone); save(); render(); } };
+          toast('🗑️ Expense removed', 'Undo');
+        });
+      }
+      setTimeout(function () { if (isNew) $('#e-amt', sheet).focus(); }, 220);
+    });
+  }
+
+  function payoutSheet(who) {
+    var owed = owedTo(who);
+    var label = who === 'tax' ? 'tax' : partnerName();
+    var html = '<h2>Pay ' + esc(label) + '</h2>' +
+      '<div class="sheet-sub">' + money(owed) + ' has built up. Recording a payment clears it down.</div>' +
+      '<div class="field"><label>Amount paid</label>' +
+      '<input id="p-amt" type="text" inputmode="decimal" value="' + (owed > 0 ? owed.toFixed(2) : '') + '"></div>' +
+      '<div class="field"><label>Date</label><input id="p-date" type="date" value="' + todayISO() + '"></div>' +
+      '<div class="field"><label>Note (optional)</label><input id="p-note" type="text" placeholder="e.g. cash on Friday"></div>' +
+      '<button class="btn primary" id="p-save" style="margin-bottom:8px">Record it</button>' +
+      '<button class="btn ghost" data-act="close-sheet">Cancel</button>';
+
+    openSheet(html, function (sheet) {
+      $('#p-save', sheet).addEventListener('click', function () {
+        var amt = round2(parseFloat($('#p-amt', sheet).value));
+        var date = $('#p-date', sheet).value;
+        if (!(amt > 0)) return toast('⚠️ Enter an amount');
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return toast('⚠️ Pick a date');
+        var rec = { id: uid(), date: date, amount: amt, to: who,
+                    note: $('#p-note', sheet).value.trim(), ts: Date.now() };
+        state.payouts.push(rec);
+        save(); closeSheet(); render();
+        lastUndo = {
+          fn: function () {
+            state.payouts = state.payouts.filter(function (x) { return x.id !== rec.id; });
+            save(); render();
+          }
+        };
+        toast('✅ ' + money(amt) + ' to ' + esc(label) + ' · ' + money(owedTo(who)) + ' left', 'Undo');
+      });
+      setTimeout(function () { $('#p-amt', sheet).focus(); }, 220);
+    });
+  }
+
+  function businessSetupSheet() {
+    var p = state.settings.partner || { name: 'Logan', mode: 'none', value: 0 };
+    var html = '<h2>Splits &amp; tax</h2>' +
+      '<div class="sheet-sub">Money that leaves before you keep anything. Both are taken out ' +
+      'automatically on every job you log.</div>' +
+      '<div class="field"><label>Who takes a cut</label>' +
+      '<input id="b-name" type="text" value="' + esc(p.name || '') + '" placeholder="Logan" autocomplete="off"></div>' +
+      '<div class="field"><label>They take</label><select id="b-mode">' +
+      PARTNER_MODES.map(function (m) {
+        return '<option value="' + m.v + '"' + (p.mode === m.v ? ' selected' : '') + '>' + m.label + '</option>';
+      }).join('') + '</select></div>' +
+      '<div class="field" id="b-val-wrap"><label id="b-val-label">How much</label>' +
+      '<input id="b-value" type="text" inputmode="decimal" value="' + (p.value || '') + '"></div>' +
+      '<div class="hint mb" id="b-preview"></div>' +
+      '<div class="sep"></div>' +
+      '<div class="field"><label>Put by for tax</label>' +
+      '<div class="chip-row" id="b-tax">' +
+      [0, 10, 15, 20, 25, 30].map(function (n) {
+        return '<button type="button" class="chip' + (state.settings.taxRate === n ? ' on' : '') +
+          '" data-t="' + n + '">' + (n === 0 ? 'none' : n + '%') + '</button>';
+      }).join('') + '</div>' +
+      '<div class="hint">Taken off what\'s left after costs and the cut. Self-employed tax is the ' +
+      'thing that catches people out — this holds it back so it is there when it is asked for.</div></div>' +
+      '<button class="btn primary" id="b-save" style="margin-bottom:8px">Save</button>' +
+      '<button class="btn ghost" data-act="close-sheet">Cancel</button>';
+
+    openSheet(html, function (sheet) {
+      var tax = state.settings.taxRate || 0;
+      $$('#b-tax .chip', sheet).forEach(function (c) {
+        c.addEventListener('click', function () {
+          tax = +c.dataset.t;
+          $$('#b-tax .chip', sheet).forEach(function (x) { x.classList.remove('on'); });
+          c.classList.add('on');
+          preview();
+        });
+      });
+
+      function preview() {
+        var mode = $('#b-mode', sheet).value;
+        var val = parseFloat($('#b-value', sheet).value) || 0;
+        var m = PARTNER_MODES.filter(function (x) { return x.v === mode; })[0] || {};
+        $('#b-val-wrap', sheet).style.display = mode === 'none' ? 'none' : '';
+        $('#b-val-label', sheet).textContent =
+          m.suffix === '%' ? 'What percentage' : 'How much per ' + (mode === 'perJob' ? 'job' : 'day');
+
+        // worked example on a $200 day with $30 of costs
+        var rev = 200, cost = 30;
+        var cut = mode === 'pctRevenue' ? rev * val / 100
+          : mode === 'pctProfit' ? Math.max(0, rev - cost) * val / 100
+          : mode === 'perJob' ? val
+          : mode === 'perDay' ? val : 0;
+        var afterCut = rev - cost - cut;
+        var t = Math.max(0, afterCut) * tax / 100;
+        $('#b-preview', sheet).innerHTML =
+          'On a ' + money(rev) + ' day with ' + money(cost) + ' of costs: ' +
+          (cut > 0 ? '<strong>' + money(cut) + '</strong> to ' +
+            esc($('#b-name', sheet).value.trim() || 'them') + ', ' : '') +
+          (t > 0 ? '<strong>' + money(t) + '</strong> to tax, ' : '') +
+          '<strong>' + money(afterCut - t) + '</strong> left before bills.';
+      }
+      ['#b-mode', '#b-value', '#b-name'].forEach(function (sel) {
+        $(sel, sheet).addEventListener('input', preview);
+        $(sel, sheet).addEventListener('change', preview);
+      });
+      preview();
+
+      $('#b-save', sheet).addEventListener('click', function () {
+        var mode = $('#b-mode', sheet).value;
+        var val = round2(parseFloat($('#b-value', sheet).value)) || 0;
+        if (mode !== 'none' && !(val > 0)) return toast('⚠️ Enter how much they take');
+        state.settings.partner = {
+          name: $('#b-name', sheet).value.trim() || 'Partner',
+          mode: mode, value: val
+        };
+        state.settings.taxRate = tax;
+        save(); closeSheet(); render();
+        toast('✅ Splits saved');
+      });
+    });
+  }
+
   /* ---- Day detail -------------------------------------------------------- */
 
   function daySheet(iso) {
@@ -1750,8 +2468,41 @@
     var sim = null;
     if (!isPast(iso)) sim = simulate(todayISO(), iso)[iso];
 
+    var dm = dayMoney(iso);
     var html = '<h2>' + fmtDate(iso, 'long') + '</h2>' +
       '<div class="sheet-sub">' + (funding ? 'Workday' : 'Day off') + ' · ' + relDay(iso) + '</div>';
+
+    if (dm.revenue > 0.004 || dm.costs > 0.004) {
+      html += '<div class="card tight"><div class="card-title">That day\'s money</div><div class="flow">' +
+        flowRow('Money in', plural(dm.jobs, 'job'), dm.revenue, '') +
+        (dm.costs > 0.004 ? flowRow('Cost you', '', -dm.costs, 'out') : '') +
+        (dm.partner > 0.004 ? flowRow(esc(partnerName()), '', -dm.partner, 'out') : '') +
+        (dm.tax > 0.004 ? flowRow('Tax', '', -dm.tax, 'out') : '') +
+        (dm.bills > 0.004 ? flowRow('Bills', '', -dm.bills, 'out') : '') +
+        '<div class="flow-row total ' + (dm.takeHome < 0 ? 'neg' : 'pos') + '">' +
+        '<div class="flow-label">Kept</div><div class="flow-amt">' + money(dm.takeHome) + '</div></div>' +
+        '</div></div>';
+
+      jobsOn(iso).forEach(function (j) {
+        html += '<button class="log-row" data-act="edit-job" data-id="' + j.id + '">' +
+          '<div class="log-ico">💵</div><div class="log-main">' +
+          '<div class="log-title">' + esc(j.service || 'Job') + '</div>' +
+          '<div class="log-sub">' + (j.client ? esc(j.client) : 'no name') + '</div></div>' +
+          '<div class="log-amt in">+' + money(j.amount) + '</div></button>';
+      });
+      expensesOn(iso).forEach(function (e) {
+        var cat = EXPENSE_CATS.filter(function (c) { return c.v === e.category; })[0];
+        html += '<button class="log-row" data-act="edit-expense" data-id="' + e.id + '">' +
+          '<div class="log-ico">' + (cat ? cat.icon : '📎') + '</div><div class="log-main">' +
+          '<div class="log-title">' + (cat ? cat.label : 'Other') + '</div>' +
+          '<div class="log-sub">' + (e.note ? esc(e.note) : '') + '</div></div>' +
+          '<div class="log-amt out">−' + money(e.amount) + '</div></button>';
+      });
+    }
+
+    html += '<div class="btn-row mt" style="margin-bottom:8px">' +
+      '<button class="btn" data-act="add-job" data-date="' + iso + '">＋ Job</button>' +
+      '<button class="btn" data-act="add-expense" data-date="' + iso + '">＋ Expense</button></div>';
 
     if (sim && sim.remainingTotal > 0.004) {
       html += '<div class="card tight"><div class="card-title">Plan for this day</div>';
@@ -2226,6 +2977,25 @@
         break;
 
       case 'goto-bills': view = 'bills'; render(); window.scrollTo({ top: 0 }); break;
+
+      case 'add-job': jobSheet(null, t.dataset.date || null); break;
+      case 'edit-job': {
+        var jb = null;
+        state.jobs.forEach(function (x) { if (x.id === id) jb = x; });
+        if (jb) jobSheet(jb);
+        break;
+      }
+      case 'add-expense': expenseSheet(null, t.dataset.date || null); break;
+      case 'edit-expense': {
+        var ex = null;
+        state.expenses.forEach(function (x) { if (x.id === id) ex = x; });
+        if (ex) expenseSheet(ex);
+        break;
+      }
+      case 'pay-partner': payoutSheet('partner'); break;
+      case 'pay-tax': payoutSheet('tax'); break;
+      case 'business-setup': businessSetupSheet(); break;
+      case 'chart-day': daySheet(t.dataset.date); break;
 
       case 'toggle-archived': showArchived = !showArchived; render(); break;
 
