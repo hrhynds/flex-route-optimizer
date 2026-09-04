@@ -1862,20 +1862,86 @@
    * A setup link: billcushion.../#import=<url-safe base64 of a backup>.
    * Lets a whole list of bills arrive in one tap instead of being typed on a phone.
    */
+  /** Pick an icon from the bill's name, so a short link needn't carry one. */
+  function guessIcon(name) {
+    var n = String(name).toLowerCase();
+    var map = [
+      // card/credit first: a bare /car/ would claim "credit card"
+      [/credit|card|smartpay|loan|finance|pay\s*plan/, '💳'],
+      [/rent|mortgage|hous/, '🏠'], [/insur/, '🛡️'],
+      [/\bcars?\b|auto|vehicle|accident|truck|van/, '🚗'],
+      [/phone|mobile|cell/, '📱'], [/electric|power|light/, '⚡'], [/internet|wifi|broadband/, '🌐'],
+      [/water/, '💧'], [/\bgas\b|heat/, '🔥'],
+      [/fuel|petrol/, '⛽'], [/grocer|food/, '🛒'], [/bank/, '🏦'], [/warrant|repair|service/, '🔧'],
+      [/tv|stream|subscri/, '📺'], [/medic|health|doctor|dental/, '🏥'], [/child|daycare/, '👶'],
+      [/storage|unit/, '📦'], [/school|tuition|student/, '🎓'], [/pet|dog|cat|vet/, '🐕']
+    ];
+    for (var i = 0; i < map.length; i++) if (map[i][0].test(n)) return map[i][1];
+    return '🧾';
+  }
+
+  /**
+   * The short form of a setup link:
+   *   #add=Name,amount,YYYY-MM-DD[,d1/d2/...];Name,amount,...&w=5&c=6
+   * Same idea as #import= but a fraction of the length, so it survives being
+   * pasted through a chat app. "+" reads as a space.
+   */
+  function parseAddLink(hash) {
+    var m = hash.match(/[#&]add=([^&]*)/);
+    if (!m) return null;
+
+    var txt;
+    try { txt = decodeURIComponent(m[1]); } catch (e) { txt = m[1]; }
+    txt = txt.replace(/\+/g, ' ');
+
+    var bills = [];
+    txt.split(';').forEach(function (chunk) {
+      var f = chunk.split(',');
+      var name = (f[0] || '').trim();
+      var amount = parseFloat(f[1]);
+      if (!name || !(amount > 0)) return;
+
+      var b = {
+        id: uid(), name: name, icon: guessIcon(name),
+        amount: round2(amount), recurrence: 'monthly', cycle: 0
+      };
+      var due = (f[2] || '').trim();
+      if (/^\d{4}-\d{2}-\d{2}$/.test(due)) {
+        b.dueDate = due;
+        b.anchorDay = fromISO(due).getDate();
+      }
+      var sched = (f[3] || '').split('/').filter(function (x) { return /^\d{4}-\d{2}-\d{2}$/.test(x.trim()); });
+      if (sched.length) { b.recurrence = 'schedule'; b.scheduleDates = sched.sort(); }
+      bills.push(b);
+    });
+    if (!bills.length) return null;
+
+    var data = { version: 1, bills: bills, settings: {}, meta: { created: todayISO() } };
+    var wk = hash.match(/[#&]w=(\d)/);
+    if (wk) { data.settings.countMode = 'estimate'; data.settings.daysPerWeek = clamp(+wk[1], 1, 7); }
+    var cu = hash.match(/[#&]c=(\d{1,2})/);
+    if (cu) { data.settings.cushionDays = clamp(+cu[1], 0, 60); data.settings.cushionMode = 'workdays'; }
+    return data;
+  }
+
   function checkImportLink() {
-    var m = (location.hash || '').match(/[#&]import=([A-Za-z0-9+/=_-]+)/);
-    if (!m) return;
+    var hash = location.hash || '';
+    var short = parseAddLink(hash);
+    var m = short ? null : hash.match(/[#&]import=([A-Za-z0-9+/=_-]+)/);
+    if (!m && !short) return;
 
     var clearHash = function () {
       try { history.replaceState(null, '', location.pathname + location.search); }
       catch (e) { location.hash = ''; }
     };
 
-    var data;
-    try {
-      var b64 = m[1].replace(/-/g, '+').replace(/_/g, '/');
-      data = JSON.parse(decodeURIComponent(escape(atob(b64))));
-    } catch (e) { data = null; }
+    var data = short;
+    if (!data) {
+      try {
+        var b64 = m[1].replace(/-/g, '+').replace(/_/g, '/');
+        data = JSON.parse(decodeURIComponent(escape(atob(b64))));
+      } catch (e) { data = null; }
+    }
 
     if (!data || !Array.isArray(data.bills)) {
       clearHash();
@@ -1896,6 +1962,8 @@
       label: state.bills.length ? 'Replace everything' : 'Load these bills',
       cls: 'primary',
       fn: function () {
+        // A short link names only a few settings; keep whatever else is set.
+        if (short) data.settings = Object.assign({}, state.settings, data.settings);
         localStorage.setItem(STORE_KEY, JSON.stringify(data));
         load(); save(); view = 'bills'; render();
         toast('✅ Loaded ' + plural(state.bills.length, 'bill'));
