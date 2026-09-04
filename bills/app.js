@@ -212,6 +212,8 @@
         if (!Array.isArray(b.paidHistory)) b.paidHistory = [];
       });
       state.contributions.forEach(function (c) { if (c.cycle == null) c.cycle = 0; });
+      // expenses used to carry only a note; the note was always the item
+      state.expenses.forEach(function (e) { if (!e.item) e.item = e.note || ''; });
       if (!state.settings.workdays.length) state.settings.workdays = [1, 2, 3, 4, 5];
     } catch (e) {
       console.warn('Could not read saved data', e);
@@ -770,6 +772,50 @@
     return out;
   }
 
+  /**
+   * Things bought before, newest first, with the price last paid.
+   * Turns a repeat purchase into one tap instead of typing it out again.
+   */
+  function recentItems(category, limit) {
+    var seen = {}, out = [];
+    state.expenses.slice().sort(function (a, b) { return b.ts - a.ts; }).forEach(function (e) {
+      var name = (e.item || '').trim();
+      if (!name) return;
+      if (category && e.category !== category) return;
+      var key = name.toLowerCase();
+      if (seen[key]) { seen[key].times++; return; }
+      seen[key] = { name: name, amount: e.amount, category: e.category, times: 1 };
+      out.push(seen[key]);
+    });
+    out.sort(function (a, b) { return b.times - a.times; });
+    return out.slice(0, limit || 6);
+  }
+
+  /** Everything spent in one category, with its own totals. */
+  function categorySummary(cat, fromISO_, toISO_) {
+    var list = state.expenses.filter(function (e) {
+      if ((e.category || 'other') !== cat) return false;
+      if (fromISO_ && diffDays(fromISO_, e.date) < 0) return false;
+      if (toISO_ && diffDays(e.date, toISO_) < 0) return false;
+      return true;
+    });
+    var byItem = {};
+    list.forEach(function (e) {
+      var k = (e.item || 'Unnamed').trim() || 'Unnamed';
+      if (!byItem[k]) byItem[k] = { name: k, total: 0, times: 0 };
+      byItem[k].total = round2(byItem[k].total + e.amount);
+      byItem[k].times++;
+    });
+    var days = {};
+    list.forEach(function (e) { days[e.date] = 1; });
+    return {
+      cat: cat, list: list, total: sum(list),
+      days: Object.keys(days).length,
+      items: Object.keys(byItem).map(function (k) { return byItem[k]; })
+        .sort(function (a, b) { return b.total - a.total; })
+    };
+  }
+
   function monthWindow(iso) {
     var d = fromISO(iso || todayISO());
     return {
@@ -1089,8 +1135,8 @@
         var cat = EXPENSE_CATS.filter(function (x) { return x.v === e.category; })[0];
         html += '<button class="log-row" data-act="edit-expense" data-id="' + e.id + '">' +
           '<div class="log-ico">' + (cat ? cat.icon : '📎') + '</div>' +
-          '<div class="log-main"><div class="log-title">' + (cat ? cat.label : 'Other') + '</div>' +
-          '<div class="log-sub">' + (e.note ? esc(e.note) : relDay(e.date)) + '</div></div>' +
+          '<div class="log-main"><div class="log-title">' + esc(e.item || (cat ? cat.label : 'Other')) + '</div>' +
+          '<div class="log-sub">' + (cat ? cat.label : 'Other') + '</div></div>' +
           '<div class="log-amt out">−' + money(e.amount) + '</div></button>';
       });
       html += '</div>';
@@ -1435,14 +1481,15 @@
       html += '<div class="card"><div class="card-title">What it costs you</div>';
       cats.forEach(function (x) {
         var cat = EXPENSE_CATS.filter(function (c) { return c.v === x.k; })[0];
-        html += '<div style="padding:8px 0">' +
+        html += '<button data-act="cat-detail" data-cat="' + esc(x.k) + '" ' +
+          'style="display:block;width:100%;text-align:left;background:none;border:none;padding:8px 0;color:inherit">' +
           '<div style="display:flex;justify-content:space-between;gap:10px;font-size:0.9rem">' +
           '<span>' + (cat ? cat.icon + ' ' + cat.label : esc(x.k)) + '</span>' +
-          '<span class="lr-amt">' + money(x.v) + '</span></div>' +
+          '<span class="lr-amt">' + money(x.v) + ' <span class="faint">›</span></span></div>' +
           '<div class="bar" style="margin-top:6px"><div class="bar-fill" style="width:' +
-          (x.v / catMax * 100).toFixed(1) + '%;background:' + cols[1] + '"></div></div></div>';
+          (x.v / catMax * 100).toFixed(1) + '%;background:' + cols[1] + '"></div></div></button>';
       });
-      html += '</div>';
+      html += '<div class="hint mt">Tap any of these for what you bought and when.</div></div>';
     }
 
     /* ---- day by day ---- */
@@ -2281,22 +2328,36 @@
     });
   }
 
-  function expenseSheet(exp, dateISO) {
+  function expenseSheet(exp, dateISO, presetCat) {
     var isNew = !exp;
-    var d = exp || { amount: '', category: 'supplies', date: dateISO || todayISO(), note: '' };
+    var d = exp || { amount: '', category: presetCat || 'supplies',
+                     date: dateISO || todayISO(), item: '' };
+    var again = isNew ? recentItems(null, 8) : [];
 
     var html = '<h2>' + (isNew ? 'Log an expense' : 'Edit expense') + '</h2>' +
-      '<div class="sheet-sub">What the work cost you.</div>' +
-      '<div class="field"><label>Amount</label>' +
+      '<div class="sheet-sub">What the work cost you. Some days that\'s nothing — ' +
+      'there is no standing amount, only what you log.</div>';
+
+    if (again.length) {
+      html += '<div class="field"><label>Bought before</label><div class="chip-row" id="e-again">' +
+        again.map(function (r, i) {
+          var c = EXPENSE_CATS.filter(function (x) { return x.v === r.category; })[0];
+          return '<button type="button" class="chip" data-i="' + i + '">' +
+            (c ? c.icon : '📎') + ' ' + esc(r.name) + ' <span class="faint">' + money(r.amount) + '</span></button>';
+        }).join('') + '</div>' +
+        '<div class="hint">One tap fills it in. Change the amount if the price moved.</div></div>';
+    }
+
+    html += '<div class="field"><label>Amount</label>' +
       '<input id="e-amt" type="text" inputmode="decimal" value="' + (d.amount === '' ? '' : d.amount) + '" placeholder="0.00"></div>' +
-      '<div class="field"><label>What for</label><div class="chip-row" id="e-cat">' +
+      '<div class="field"><label>What was it</label>' +
+      '<input id="e-item" type="text" value="' + esc(d.item || '') + '" placeholder="e.g. wax, towels, tyre shine" autocomplete="off"></div>' +
+      '<div class="field"><label>What kind</label><div class="chip-row" id="e-cat">' +
       EXPENSE_CATS.map(function (c) {
         return '<button type="button" class="chip' + (d.category === c.v ? ' on' : '') +
           '" data-c="' + c.v + '">' + c.icon + ' ' + c.label + '</button>';
       }).join('') + '</div></div>' +
       '<div class="field"><label>Date</label><input id="e-date" type="date" value="' + esc(d.date) + '"></div>' +
-      '<div class="field"><label>Note (optional)</label>' +
-      '<input id="e-note" type="text" value="' + esc(d.note || '') + '" placeholder="e.g. wax + towels"></div>' +
       '<button class="btn primary" id="e-save" style="margin-bottom:8px">' +
       (isNew ? 'Log it' : 'Save changes') + '</button>';
     if (!isNew) html += '<button class="btn danger" id="e-del" style="margin-bottom:8px">Delete this expense</button>';
@@ -2304,11 +2365,20 @@
 
     openSheet(html, function (sheet) {
       var cat = d.category;
+      var setCat = function (v) {
+        cat = v;
+        $$('#e-cat .chip', sheet).forEach(function (x) { x.classList.toggle('on', x.dataset.c === v); });
+      };
       $$('#e-cat .chip', sheet).forEach(function (c) {
+        c.addEventListener('click', function () { setCat(c.dataset.c); });
+      });
+      $$('#e-again .chip', sheet).forEach(function (c) {
         c.addEventListener('click', function () {
-          cat = c.dataset.c;
-          $$('#e-cat .chip', sheet).forEach(function (x) { x.classList.remove('on'); });
-          c.classList.add('on');
+          var r = again[+c.dataset.i];
+          if (!r) return;
+          $('#e-amt', sheet).value = r.amount;
+          $('#e-item', sheet).value = r.name;
+          setCat(r.category);
         });
       });
 
@@ -2318,9 +2388,10 @@
         if (!(amt > 0)) return toast('⚠️ Enter what it cost');
         if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return toast('⚠️ Pick a date');
 
+        var item = $('#e-item', sheet).value.trim();
         var rec = {
           id: exp ? exp.id : uid(), date: date, amount: amt, category: cat,
-          note: $('#e-note', sheet).value.trim(), ts: exp ? exp.ts : Date.now()
+          item: item, note: item, ts: exp ? exp.ts : Date.now()
         };
         if (exp) {
           state.expenses = state.expenses.map(function (x) { return x.id === exp.id ? rec : x; });
@@ -2328,7 +2399,8 @@
           state.expenses.push(rec);
         }
         save(); closeSheet(); render();
-        toast('✅ ' + money(amt) + ' expense logged');
+        var catLbl = (EXPENSE_CATS.filter(function (c) { return c.v === cat; })[0] || {}).label || 'Expense';
+        toast('✅ ' + money(amt) + ' · ' + (item || catLbl) + ' logged');
       });
 
       if (!isNew) {
@@ -2342,6 +2414,70 @@
       }
       setTimeout(function () { if (isNew) $('#e-amt', sheet).focus(); }, 220);
     });
+  }
+
+  function categorySheet(cat) {
+    var meta = EXPENSE_CATS.filter(function (c) { return c.v === cat; })[0] || { label: 'Other', icon: '📎' };
+    var all = categorySummary(cat);
+    var mw = monthWindow(todayISO());
+    var mon = categorySummary(cat, mw.start, todayISO());
+
+    // how often it actually comes up — the point being that it isn't every day
+    var worked = {};
+    state.jobs.forEach(function (j) { worked[j.date] = 1; });
+    var workedDays = Object.keys(worked).length;
+    var boughtOnWorked = Object.keys(worked).filter(function (iso) {
+      return state.expenses.some(function (e) { return e.date === iso && (e.category || 'other') === cat; });
+    }).length;
+
+    var html = '<h2>' + meta.icon + ' ' + esc(meta.label) + '</h2>' +
+      '<div class="sheet-sub">Logged when you actually buy something — there is no ' +
+      'daily amount running in the background.</div>';
+
+    html += '<div class="card tight"><div class="stat-grid">' +
+      '<div class="stat"><div class="stat-val money">' + money0(mon.total) + '</div><div class="stat-lbl">This month</div></div>' +
+      '<div class="stat"><div class="stat-val money">' + money0(all.total) + '</div><div class="stat-lbl">All time</div></div>' +
+      '<div class="stat"><div class="stat-val money">' + money0(all.days ? all.total / all.days : 0) + '</div><div class="stat-lbl">A shopping day</div></div>' +
+      '</div>';
+    if (workedDays) {
+      html += '<div class="hint mt">You bought ' + esc(meta.label.toLowerCase()) + ' on <strong>' +
+        boughtOnWorked + ' of ' + plural(workedDays, 'working day') + '</strong>' +
+        (boughtOnWorked < workedDays
+          ? ' — the other ' + (workedDays - boughtOnWorked) + ' cost you nothing here.'
+          : '.') + '</div>';
+    }
+    html += '</div>';
+
+    if (all.items.length) {
+      var top = all.items[0].total;
+      html += '<div class="card"><div class="card-title">What you buy</div>';
+      all.items.slice(0, 10).forEach(function (x) {
+        html += '<div style="padding:8px 0">' +
+          '<div style="display:flex;justify-content:space-between;gap:10px;font-size:0.9rem">' +
+          '<span>' + esc(x.name) + ' <span class="faint tiny">×' + x.times + '</span></span>' +
+          '<span class="lr-amt">' + money(x.total) + '</span></div>' +
+          '<div class="bar" style="margin-top:6px"><div class="bar-fill" style="width:' +
+          (top > 0 ? (x.total / top * 100).toFixed(1) : 0) + '%;background:' + vizColors()[1] + '"></div></div></div>';
+      });
+      html += '</div>';
+    }
+
+    html += '<button class="btn primary" data-act="add-expense" data-cat="' + cat + '" style="margin-bottom:8px">' +
+      '＋ Log ' + esc(meta.label.toLowerCase()) + '</button>';
+
+    if (all.list.length) {
+      html += '<div class="sep"></div><div class="card-title">Every purchase</div>';
+      all.list.slice().sort(function (a, b) { return b.ts - a.ts; }).slice(0, 30).forEach(function (e) {
+        html += '<button class="log-row" data-act="edit-expense" data-id="' + e.id + '">' +
+          '<div class="log-ico">' + meta.icon + '</div><div class="log-main">' +
+          '<div class="log-title">' + esc(e.item || meta.label) + '</div>' +
+          '<div class="log-sub">' + fmtDate(e.date, 'dow') + ' · ' + relDay(e.date) + '</div></div>' +
+          '<div class="log-amt out">−' + money(e.amount) + '</div></button>';
+      });
+    }
+
+    html += '<button class="btn ghost mt" data-act="close-sheet">Close</button>';
+    openSheet(html);
   }
 
   function payoutSheet(who) {
@@ -3069,7 +3205,8 @@
         if (jb) jobSheet(jb);
         break;
       }
-      case 'add-expense': expenseSheet(null, t.dataset.date || null); break;
+      case 'add-expense': expenseSheet(null, t.dataset.date || null, t.dataset.cat || null); break;
+      case 'cat-detail': categorySheet(t.dataset.cat); break;
       case 'edit-expense': {
         var ex = null;
         state.expenses.forEach(function (x) { if (x.id === id) ex = x; });
@@ -3134,6 +3271,7 @@
      ------------------------------------------------------------------------ */
 
   load();
+  save();            // write the migrated shape back, so a backup carries it
   render();
   checkImportLink();
 
