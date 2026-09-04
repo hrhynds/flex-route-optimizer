@@ -52,6 +52,8 @@ daily rate × funding days left = money still needed
   Tap any bill to correct its amount or due date on the spot — with −1 day / +1 day /
   +1 week / +1 month nudges and a preview of the new daily figure before you commit.
   Add a bill from the ＋ in the header on any tab; delete one from its own sheet.
+  A bill can be added before you know its due date — it sits flagged as "needs a date"
+  and stays out of the daily figure until you set one, rather than quietly skewing it.
 - **Plan** — a month calendar with the required amount on every future day, dropping
   as bills finish. Completed days, missed days and days off are all marked.
 - **More** — your workday pattern, cushion length, rounding, and backup/restore.
@@ -74,6 +76,14 @@ daily rate × funding days left = money still needed
   cash handling — which finishes each bill slightly early.
 - **Storage.** Everything lives in this device's browser storage. Nothing is uploaded.
   Clearing Safari data erases it, so use **More → Save backup** now and then.
+
+### Setup links
+
+A whole list of bills can arrive in one tap. A link of the form
+`.../bills/#import=<url-safe base64 of a backup>` opens the app, shows what it contains,
+and asks before doing anything — with the choice to replace what's there or add to it.
+The fragment is cleared afterwards so a refresh won't ask twice, and a damaged link
+changes nothing. It works whether or not the app is already open.
 
 ### Add it to your iPhone
 
