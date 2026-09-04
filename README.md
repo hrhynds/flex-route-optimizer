@@ -6,11 +6,38 @@ browser and keep their data on your device.
 | App | Live link | What it does |
 |---|---|---|
 | **Flex Route Optimizer** | [`/`](https://hrhynds.github.io/flex-route-optimizer/) | Reads Amazon Flex stop screenshots and builds an optimised driving route. |
-| **Bill Cushion** | [`/bills/`](https://hrhynds.github.io/flex-route-optimizer/bills/) | Works out exactly what to set aside each workday so every bill is fully funded days before it's due. |
+| **Ledger** | [`/bills/`](https://hrhynds.github.io/flex-route-optimizer/bills/) | Money in, money out, and what's genuinely left after a partner's cut, tax and the day's share of the bills. |
 
 ---
 
-## Bill Cushion
+## Ledger
+
+Two halves that answer one question — *what is actually mine today?*
+
+### The day's chain
+
+Every day runs the same way:
+
+```
+money in                       what jobs brought in
+− what it cost you             supplies, fuel, equipment
+− your partner's cut           % of takings, % of profit, per job, or per day
+− tax put by                   a share of what's left, held back
+− today's share of the bills   the cushion, below
+= what you keep
+```
+
+Run backwards, that same chain gives **break-even**: what the day has to bring in
+before you are working for nothing. It's on the Today screen while the day is still
+short, and as a dashed line across the 14-day chart.
+
+Nothing is a lump sum. A job is logged with its amount, service, customer and how it
+was paid; an expense with its category. Both are editable and deletable, and every
+figure in the app re-runs the moment either changes.
+
+**Money that isn't yours** is tracked as a running balance rather than a vague
+feeling — what has built up for your partner, and what tax is being held. Record a
+payment against either and the balance clears down.
 
 ### The rule it enforces
 
@@ -42,10 +69,13 @@ daily rate × funding days left = money still needed
 
 ### What's in it
 
-- **Today** — one number: what to set aside right now, split per bill. One tap logs it
-  and marks the day complete. "Different amount" takes whatever you actually have and
-  splits it most-urgent-first; "Couldn't today" logs the day honestly and re-spreads
-  the shortfall.
+- **Today** — what you keep, the chain that gets there, the jobs and costs behind it,
+  and the bill money still to move. One tap sets the bills aside and completes the day.
+  "Different amount" takes whatever you actually have and splits it most-urgent-first;
+  "Couldn't today" logs the day honestly and re-spreads the shortfall.
+- **Business** — the month so far, a 14-day chart of money in against break-even, where
+  the month's money went, balances owed, your best-earning services, what the work costs
+  you, and a day-by-day list.
 - **Bills** — a progress bar per bill showing money banked against the total, a pace
   marker for where you should be, and a status badge (on track / behind / due now /
   fully funded). Mark one paid and it rolls to the next cycle, carrying any surplus.
