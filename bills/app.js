@@ -121,8 +121,9 @@
       settings: {
         cushionDays: 6,
         cushionMode: 'workdays',   // count the cushion in workdays, not calendar days
-        countMode: 'workdays',     // 'workdays' = spread over days you actually work
+        countMode: 'workdays',     // 'workdays' | 'alldays' | 'estimate'
         workdays: [1, 2, 3, 4, 5], // 0 = Sunday
+        daysPerWeek: 5,            // 'estimate' mode: how many days a week you usually work
         roundTo: 0.01,             // round the daily ask up to this step
         installDismissed: false,
         lastBackup: null
@@ -188,14 +189,22 @@
     if (state.settings.countMode === 'alldays') return true;
     if (state.overrides.off.indexOf(iso) !== -1) return false;
     if (state.overrides.work.indexOf(iso) !== -1) return true;
+    // Unpredictable work: any day might be a working day, so any day can take money.
+    if (state.settings.countMode === 'estimate') return true;
     return state.settings.workdays.indexOf(dow(iso)) !== -1;
   }
+
+  function perWeek() { return clamp(state.settings.daysPerWeek || 5, 1, 7); }
 
   /** Funding days from `a` to `b`, both ends included. */
   function countFundingDays(a, b) {
     var span = diffDays(a, b);
     if (span < 0) return 0;
     if (state.settings.countMode === 'alldays') return span + 1;
+    // No fixed pattern to count, so scale calendar days by how often you work.
+    if (state.settings.countMode === 'estimate') {
+      return Math.max(1, Math.round((span + 1) * perWeek() / 7));
+    }
     if (span > 1500) span = 1500;
     var n = 0, iso = a;
     for (var i = 0; i <= span; i++) {
@@ -233,9 +242,26 @@
     return b.cushionDays == null ? state.settings.cushionDays : b.cushionDays;
   }
 
+  /** How many calendar days it takes to get through n working days. */
+  function fundingToCalendar(k) {
+    if (k <= 0) return 0;
+    var mode = state.settings.countMode;
+    if (mode === 'alldays') return k;
+    if (mode === 'estimate') return Math.ceil(k * 7 / perWeek());
+    var d = todayISO(), hit = 0, cal = 0;
+    for (var i = 0; i < 900 && hit < k; i++) {
+      d = addDays(d, 1); cal++;
+      if (isFundingDay(d)) hit++;
+    }
+    return cal;
+  }
+
   /** Walk back n funding days from a date — "6 workdays before it's due". */
   function backFundingDays(iso, n) {
     if (n <= 0) return iso;
+    // Six working days is longer in calendar time the less often you work.
+    if (state.settings.countMode === 'estimate') return addDays(iso, -Math.ceil(n * 7 / perWeek()));
+    if (state.settings.countMode === 'alldays') return addDays(iso, -n);
     var d = iso, hit = 0;
     for (var i = 0; i < 600 && hit < n; i++) {
       d = addDays(d, -1);
@@ -459,12 +485,22 @@
       perDay = Math.min(remaining, ceilTo(urgent ? remaining : remaining / fundingLeft, step));
     }
 
+    // Slack: at the rate this cycle was planned at, how many days could you
+    // lose and still pay on time? Starts at the cushion, drops a day for every
+    // day you don't set anything aside, and climbs back when you work extra.
+    var plannedRate = b.amount / Math.max(1, countFundingDays(b.cycleStart, target));
+    var daysNeeded = plannedRate > 0 ? Math.ceil(remaining / plannedRate) : 0;
+    var slack = remaining <= 0.004
+      ? Math.max(0, daysToDue)
+      : Math.floor(daysToDue - fundingToCalendar(daysNeeded));
+
     var key = 'ontrack', label = 'On track';
     if (remaining <= 0.004) { key = 'funded'; label = 'Fully funded'; }
     else if (urgent) { key = 'urgent'; label = daysToDue < 0 ? 'Overdue' : 'Due now'; }
     else if (saved + 0.5 < expected) { key = 'behind'; label = 'Behind'; }
 
     return {
+      slack: slack,
       bill: b, saved: saved, remaining: remaining, progress: progress,
       pace: pace, expected: expected, shortfall: round2(Math.max(0, expected - saved)),
       perDay: perDay, fundingLeft: fundingLeft, target: target,
@@ -532,6 +568,20 @@
       else break;
     }
     return n;
+  }
+
+  /** Days a week actually worked over the last four weeks, or null if too new. */
+  function actualDaysPerWeek() {
+    var start = state.meta.created;
+    var from = addDays(todayISO(), -28);
+    if (diffDays(start, from) < 0) from = start;
+    var span = diffDays(from, addDays(todayISO(), -1));
+    if (span < 6) return null;                       // less than a week of history
+    var worked = 0;
+    for (var i = 0, d = from; i <= span; i++, d = addDays(d, 1)) {
+      if (dayActual(d) > 0.004) worked++;
+    }
+    return worked / ((span + 1) / 7);
   }
 
   function weekWindow() {
@@ -782,7 +832,8 @@
       eyebrow = urgentItems.length ? '⚠️ Needed right now' : 'Set aside today';
       amount = money(day.remainingTotal);
       sub = 'across ' + plural(day.remaining.length, 'bill') +
-            (actual > 0.004 ? ' · ' + money(actual) + ' already in today' : '');
+            (actual > 0.004 ? ' · ' + money(actual) + ' already in today' : '') +
+            slackPhrase();
     } else if (!day.funding) {
       cls += ' is-off';
       eyebrow = 'Day off';
@@ -883,6 +934,21 @@
     }
 
     host.innerHTML = html;
+  }
+
+  /** The tightest bill's slack, phrased for the hero line. */
+  function tightestSlack() {
+    var list = sortedStatuses().filter(function (s) { return s.remaining > 0.004; });
+    if (!list.length) return null;
+    var min = list[0];
+    list.forEach(function (s) { if (s.slack < min.slack) min = s; });
+    return min;
+  }
+  function slackPhrase() {
+    var t = tightestSlack();
+    if (!t) return '';
+    if (t.slack <= 0) return ' · <strong>no days to spare</strong>';
+    return ' · ' + plural(t.slack, 'day') + ' to spare';
   }
 
   function welcomeHTML() {
@@ -1001,6 +1067,9 @@
     h += '<div class="bill-meta tiny">' +
       '<span>Fully funded by <strong>' + fmtDate(s.target, 'dow') + '</strong></span>' +
       '<span class="faint">· due ' + fmtDate(b.dueDate) + ' (' + relDay(b.dueDate) + ')</span>' +
+      (s.remaining > 0.004 && s.slack <= 1
+        ? '<span>· <strong>' + (s.slack <= 0 ? 'no days to spare' : '1 day to spare') + '</strong></span>'
+        : '') +
       (s.key === 'behind' ? '<span>· <strong>' + money(s.shortfall) + ' behind pace</strong></span>' : '') +
       '</div></button>';
     return h;
@@ -1127,17 +1196,41 @@
     var html = '';
 
     html += '<div class="card"><div class="card-title">Your work schedule</div>' +
-      '<p class="small dim mb">Tap the days you normally earn money. Daily amounts get spread across these days only.</p>' +
-      '<div class="dow-picker">' +
-      DOW_MID.map(function (d, i) {
-        return '<button class="dow' + (s.workdays.indexOf(i) !== -1 ? ' on' : '') +
-          '" data-act="toggle-dow" data-n="' + i + '">' + d.slice(0, 2) + '</button>';
-      }).join('') + '</div>' +
-      '<div class="switch-row" style="margin-top:6px">' +
-      '<div><div class="sr-label">Spread over every day instead</div>' +
-      '<div class="sr-hint">Use this if money comes in daily rather than on workdays.</div></div>' +
-      '<button class="switch' + (s.countMode === 'alldays' ? ' on' : '') + '" data-act="toggle-mode"></button>' +
-      '</div></div>';
+      '<p class="small dim mb">How your earning days fall decides what each day has to carry.</p>' +
+      '<div class="chip-row mb">' +
+      [['workdays', 'Same days each week'],
+       ['estimate', 'Unpredictable'],
+       ['alldays', 'Every day']].map(function (m) {
+        return '<button class="chip' + (s.countMode === m[0] ? ' on' : '') +
+          '" data-act="set-count-mode" data-m="' + m[0] + '">' + m[1] + '</button>';
+      }).join('') + '</div>';
+
+    if (s.countMode === 'workdays') {
+      html += '<p class="small dim mb">Tap the days you normally earn.</p><div class="dow-picker">' +
+        DOW_MID.map(function (d, i) {
+          return '<button class="dow' + (s.workdays.indexOf(i) !== -1 ? ' on' : '') +
+            '" data-act="toggle-dow" data-n="' + i + '">' + d.slice(0, 2) + '</button>';
+        }).join('') + '</div>';
+    } else if (s.countMode === 'estimate') {
+      var avg = actualDaysPerWeek();
+      html += '<p class="small dim mb">Roughly how many days a week do you work? Any day can take money — ' +
+        'this just sets how many earning days the app expects between now and each due date.</p>' +
+        '<div class="chip-row">' +
+        [2, 3, 4, 5, 6, 7].map(function (n) {
+          return '<button class="chip' + (perWeek() === n ? ' on' : '') +
+            '" data-act="set-dpw" data-n="' + n + '">' + n + ' a week</button>';
+        }).join('') + '</div>' +
+        (avg != null
+          ? '<div class="hint mt">You have actually averaged <strong>' + avg.toFixed(1) +
+            ' days a week</strong> over the last four weeks.' +
+            (Math.abs(avg - perWeek()) >= 1
+              ? ' Worth changing this to ' + Math.max(1, Math.round(avg)) + '.'
+              : '') + '</div>'
+          : '<div class="hint mt">Once you have a few weeks logged, your real average shows up here.</div>');
+    } else {
+      html += '<p class="small dim">Every calendar day carries a share.</p>';
+    }
+    html += '</div>';
 
     html += '<div class="card"><div class="card-title">Daily amounts</div>' +
       '<div class="switch-row"><div><div class="sr-label">Safety cushion</div>' +
@@ -1184,6 +1277,11 @@
       '<strong>Per ' + unitWord() + '</strong> = money still needed ÷ ' +
       unitWord() + 's left until the cushion date' +
       '</p>' +
+      (s.countMode === 'estimate'
+        ? '<p class="small dim mt">Because your work is unpredictable, the app counts on about <strong>' +
+          plural(perWeek(), 'day') + ' a week</strong>. Any day can take money. Miss a day and you spend a ' +
+          'day of cushion — each bill shows how many days it can still afford to lose.</p>'
+        : '') +
       '<p class="small dim mt">It recalculates every single day from what you\'ve actually banked. ' +
       'Miss a day and tomorrow\'s number goes up just enough to stay on time — you can\'t quietly fall behind. ' +
       'Set aside more than asked and every following day gets cheaper.</p></div>';
@@ -1427,7 +1525,9 @@
       '</div>';
 
     html += (dated
-        ? '<div class="list-row"><div>Still needed</div><div class="lr-amt">' + money(s.remaining) + '</div></div>' +
+        ? '<div class="list-row"><div>Days you can miss and still be on time</div><div class="lr-amt">' +
+            (s.remaining <= 0.004 ? '—' : (s.slack <= 0 ? 'none left' : s.slack)) + '</div></div>' +
+          '<div class="list-row"><div>Still needed</div><div class="lr-amt">' + money(s.remaining) + '</div></div>' +
           (s.key === 'behind' ? '<div class="list-row"><div>Behind pace by</div><div class="lr-amt">' + money(s.shortfall) + '</div></div>' : '')
         : '') +
       '<div class="list-row"><div>Repeats</div><div class="lr-amt">' +
@@ -1982,10 +2082,18 @@
         save(); render();
         break;
 
-      case 'toggle-mode':
-        state.settings.countMode = state.settings.countMode === 'alldays' ? 'workdays' : 'alldays';
+      case 'set-count-mode':
+        state.settings.countMode = t.dataset.m;
         save(); render();
-        toast(state.settings.countMode === 'alldays' ? '📅 Spreading over every day' : '💼 Spreading over workdays');
+        toast(t.dataset.m === 'estimate'
+          ? '🎲 Set for an unpredictable schedule — about ' + perWeek() + ' days a week'
+          : (t.dataset.m === 'alldays' ? '📅 Spreading over every day' : '💼 Spreading over set workdays'));
+        break;
+
+      case 'set-dpw':
+        state.settings.daysPerWeek = clamp(+t.dataset.n, 1, 7);
+        save(); render();
+        toast('🎲 Planning on about ' + plural(perWeek(), 'day') + ' a week');
         break;
 
       case 'set-cushion':
