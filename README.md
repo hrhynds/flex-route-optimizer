@@ -30,6 +30,10 @@ It recalculates from what you've genuinely banked, every day. Miss a day and tom
 number rises just enough to stay on time; put aside extra and every later day gets
 cheaper. You cannot quietly drift behind.
 
+The same recalculation runs the moment anything changes — add a bill, delete one, fix a
+wrong due date or a wrong amount — and every figure re-prices immediately: today's total,
+each bill's daily share, the month calendar and the month totals.
+
 Every bill card holds to one invariant, so the numbers can be trusted at a glance:
 
 ```
@@ -45,6 +49,9 @@ daily rate × funding days left = money still needed
 - **Bills** — a progress bar per bill showing money banked against the total, a pace
   marker for where you should be, and a status badge (on track / behind / due now /
   fully funded). Mark one paid and it rolls to the next cycle, carrying any surplus.
+  Tap any bill to correct its amount or due date on the spot — with −1 day / +1 day /
+  +1 week / +1 month nudges and a preview of the new daily figure before you commit.
+  Add a bill from the ＋ in the header on any tab; delete one from its own sheet.
 - **Plan** — a month calendar with the required amount on every future day, dropping
   as bills finish. Completed days, missed days and days off are all marked.
 - **More** — your workday pattern, cushion length, rounding, and backup/restore.
