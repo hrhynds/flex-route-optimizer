@@ -336,8 +336,10 @@
         actual: round2(actualTotal)
       };
 
-      // future days: assume you follow the plan, so later days stay realistic
-      if (isFuture(iso)) {
+      // Today and beyond: assume the plan gets followed, so later days stay
+      // realistic. Skipping today here would leave its share unbanked and
+      // re-charge it across every following day.
+      if (!isPast(iso)) {
         for (var k = 0; k < remItems.length; k++) {
           for (var j = 0; j < rows.length; j++) {
             if (rows[j].b.id === remItems[k].billId) rows[j].saved = round2(rows[j].saved + remItems[k].amount);
@@ -639,6 +641,17 @@
       default: return null;
     }
   }
+  /** Shift an ISO date by whole months, clamping to the end of short months. */
+  function monthShift(iso, n) {
+    var d = fromISO(iso);
+    var anchor = d.getDate();
+    d.setDate(1);
+    d.setMonth(d.getMonth() + n);
+    var last = new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate();
+    d.setDate(Math.min(anchor, last));
+    return toISO(d);
+  }
+
   function shiftMonths(b, n) {
     var d = fromISO(b.dueDate);
     var anchor = b.anchorDay || d.getDate();
@@ -1245,7 +1258,10 @@
           b.cushionDays = cRaw === '' ? null : +cRaw;
         }
         save(); closeSheet(); render();
-        toast(isNew ? '✅ ' + name + ' added' : '✅ ' + name + ' updated');
+        // Say what it did to today's number, so the re-pricing is visible.
+        var tp = todayPlan();
+        toast('✅ ' + name + (isNew ? ' added' : ' updated') + ' · today is now ' +
+          money(tp.remainingTotal) + ' across ' + plural(tp.remaining.length, 'bill'));
       });
 
       setTimeout(function () { if (isNew && !d.name) $('#f-name', sheet).focus(); }, 220);
@@ -1276,8 +1292,25 @@
           ' · ' + plural(s.fundingLeft, state.settings.countMode === 'alldays' ? 'day' : 'workday') + ' left</span>') +
       '</div></div>';
 
-    html += '<div class="list-row"><div>Must be fully funded by</div><div class="lr-amt">' + fmtDate(s.target, 'dow') + '</div></div>' +
-      '<div class="list-row"><div>Still needed</div><div class="lr-amt">' + money(s.remaining) + '</div></div>' +
+    // --- correct the amount or the due date without leaving this sheet ---
+    html += '<div class="card tight"><div class="card-title">Amount &amp; due date</div>' +
+      '<div class="field-row">' +
+      '<div class="field"><label>Amount due</label>' +
+      '<input id="q-amount" type="text" inputmode="decimal" value="' + b.amount + '"></div>' +
+      '<div class="field"><label>Due date</label>' +
+      '<input id="q-due" type="date" value="' + esc(b.dueDate) + '"></div>' +
+      '</div>' +
+      '<div class="chip-row mb">' +
+      '<button class="chip" data-shift="-1">−1 day</button>' +
+      '<button class="chip" data-shift="1">+1 day</button>' +
+      '<button class="chip" data-shift="7">+1 week</button>' +
+      '<button class="chip" data-shift="m1">+1 month</button>' +
+      '</div>' +
+      '<div class="hint" id="q-preview"></div>' +
+      '<button class="btn primary" id="q-save" disabled style="margin-top:10px">Save changes</button>' +
+      '</div>';
+
+    html += '<div class="list-row"><div>Still needed</div><div class="lr-amt">' + money(s.remaining) + '</div></div>' +
       (s.key === 'behind' ? '<div class="list-row"><div>Behind pace by</div><div class="lr-amt">' + money(s.shortfall) + '</div></div>' : '') +
       '<div class="list-row"><div>Repeats</div><div class="lr-amt">' +
       (RECURRENCE.filter(function (r) { return r.v === b.recurrence; })[0] || { label: '—' }).label + '</div></div>';
@@ -1286,8 +1319,9 @@
       '<button class="btn primary" data-act="add-money" data-id="' + b.id + '">＋ Add money</button>' +
       '<button class="btn" data-act="mark-paid" data-id="' + b.id + '">Mark paid</button></div>' +
       '<div class="btn-row" style="margin-bottom:8px">' +
-      '<button class="btn ghost" data-act="edit-bill" data-id="' + b.id + '">Edit</button>' +
-      '<button class="btn ghost" data-act="close-sheet">Close</button></div>';
+      '<button class="btn ghost" data-act="edit-bill" data-id="' + b.id + '">Name &amp; repeat</button>' +
+      '<button class="btn danger" data-act="delete-bill" data-id="' + b.id + '">Delete</button></div>' +
+      '<button class="btn ghost" data-act="close-sheet" style="margin-bottom:8px">Close</button>';
 
     if (hist.length) {
       html += '<div class="sep"></div><div class="card-title">This cycle\'s deposits</div>';
@@ -1310,7 +1344,79 @@
       });
     }
 
-    openSheet(html);
+    openSheet(html, function (sheet) {
+      var amtEl = $('#q-amount', sheet);
+      var dueEl = $('#q-due', sheet);
+      var saveEl = $('#q-save', sheet);
+      var outEl = $('#q-preview', sheet);
+      var unit = state.settings.countMode === 'alldays' ? 'day' : 'workday';
+
+      function readAmount() { return round2(parseFloat(amtEl.value)); }
+      function changed() {
+        var a = readAmount();
+        return (a > 0 && Math.abs(a - b.amount) > 0.004) || (dueEl.value && dueEl.value !== b.dueDate);
+      }
+
+      // Live preview: what this change does to the daily number, before saving.
+      function preview() {
+        var a = readAmount();
+        var due = dueEl.value;
+        var ok = a > 0 && /^\d{4}-\d{2}-\d{2}$/.test(due);
+        saveEl.disabled = !(ok && changed());
+
+        if (!ok) { outEl.innerHTML = '⚠️ Enter an amount over $0 and a due date.'; return; }
+
+        var cd = cushionOf(b);
+        var tgt = addDays(due, -cd);
+        var banked = savedFor(b, todayISO());
+        var left = round2(Math.max(0, a - banked));
+        var n = countFundingDays(todayISO(), tgt);
+
+        if (left <= 0.004) {
+          outEl.innerHTML = '✓ Already covered — ' + money(banked) + ' banked against ' + money(a) + '.';
+        } else if (n <= 0) {
+          outEl.innerHTML = '⚠️ No ' + unit + 's left before ' + fmtDate(tgt, 'dow') +
+            ' — the whole ' + money(left) + ' would be needed right away.';
+        } else {
+          var per = Math.min(left, ceilTo(left / n, state.settings.roundTo));
+          outEl.innerHTML = (changed() ? '➜ becomes ' : '➜ ') + '<strong>' + money(per) + ' per ' + unit +
+            '</strong> × ' + plural(n, unit) + ', fully funded by <strong>' + fmtDate(tgt, 'dow') +
+            '</strong> (' + cd + ' days before it\'s due).';
+        }
+      }
+
+      $$('.chip[data-shift]', sheet).forEach(function (c) {
+        c.addEventListener('click', function () {
+          var v = c.dataset.shift;
+          var from = /^\d{4}-\d{2}-\d{2}$/.test(dueEl.value) ? dueEl.value : b.dueDate;
+          dueEl.value = v === 'm1' ? monthShift(from, 1) : addDays(from, +v);
+          preview();
+        });
+      });
+      amtEl.addEventListener('input', preview);
+      dueEl.addEventListener('input', preview);
+      dueEl.addEventListener('change', preview);
+
+      saveEl.addEventListener('click', function () {
+        var a = readAmount();
+        var due = dueEl.value;
+        if (!(a > 0)) return toast('⚠️ Enter an amount over $0');
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(due)) return toast('⚠️ Pick a due date');
+
+        b.amount = a;
+        b.dueDate = due;
+        b.anchorDay = fromISO(due).getDate();   // keeps monthly bills on the right day
+        save();
+        render();                                // every view re-prices off the new numbers
+        billDetailSheet(b);                      // reopen so the new daily amount is visible
+
+        var ns = statusOf(b);
+        toast('✅ ' + b.name + ' updated · ' +
+          (ns.remaining <= 0.004 ? 'fully covered' : money(ns.perDay) + ' per ' + unit));
+      });
+
+      preview();
+    });
   }
 
   /* ---- Money entry ------------------------------------------------------- */
