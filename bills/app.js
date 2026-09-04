@@ -758,7 +758,9 @@
     var wkSim = simulate(wk.start, wk.end);
     var wkTotal = 0;
     Object.keys(wkSim).forEach(function (k) {
-      wkTotal += isPast(k) ? wkSim[k].actual : wkSim[k].remainingTotal;
+      // what the week costs: money already set aside plus what's still owed.
+      // Today contributes both halves, so completing it doesn't zero the figure.
+      wkTotal += wkSim[k].actual + (isPast(k) ? 0 : wkSim[k].remainingTotal);
     });
 
     html += '<div class="card tight"><div class="stat-grid">' +
@@ -768,10 +770,12 @@
       '</div></div>';
 
     // per-bill split -------------------------------------------------------
-    var split = day.remaining.length ? day.remaining : day.planned;
+    var covered = !day.remaining.length;
+    var split = covered ? day.planned : day.remaining;
     if (split.length) {
       html += '<div class="card"><div class="card-title">Today\'s split' +
-        '<span class="faint" style="text-transform:none;letter-spacing:0">tap to log one</span></div>';
+        '<span class="faint" style="text-transform:none;letter-spacing:0">' +
+        (covered ? 'all covered ✓' : 'tap to log one') + '</span></div>';
       split.forEach(function (it) {
         var b = billById(it.billId);
         if (!b) return;
@@ -784,7 +788,8 @@
           '<div class="split-note">' + money(s.saved) + ' of ' + money(b.amount) +
           ' · fully funded by ' + fmtDate(s.target) + '</div>' +
           '</div>' +
-          '<div class="split-amt">' + money(it.amount) + '</div>' +
+          '<div class="split-amt' + (covered ? ' zero' : '') + '">' +
+          (covered ? '✓ ' : '') + money(it.amount) + '</div>' +
           '</button>';
       });
       html += '</div>';
