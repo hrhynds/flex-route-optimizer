@@ -1826,11 +1826,39 @@
       '<button class="btn ghost" data-act="close-sheet">Done</button>');
   }
 
+  /** Read a backup or a setup link out of arbitrary pasted text. */
+  function parsePastedSetup(raw) {
+    var txt = String(raw || '').trim();
+    if (!txt) return null;
+
+    // a whole setup link, or just the part after the #
+    if (/(^|[#&])(add|import)=/.test(txt)) {
+      var hash = txt.slice(txt.indexOf('#') === -1 ? 0 : txt.indexOf('#'));
+      if (hash.charAt(0) !== '#') hash = '#' + hash;
+      var short = parseAddLink(hash);
+      if (short) return short;
+      var m = hash.match(/[#&]import=([A-Za-z0-9+/=_-]+)/);
+      if (m) {
+        try {
+          var b64 = m[1].replace(/-/g, '+').replace(/_/g, '/');
+          return JSON.parse(decodeURIComponent(escape(atob(b64))));
+        } catch (e) { return null; }
+      }
+      return null;
+    }
+
+    try {
+      var d = JSON.parse(txt);
+      return d && Array.isArray(d.bills) ? d : null;
+    } catch (e) { return null; }
+  }
+
   function importData() {
-    openSheet('<h2>Restore a backup</h2>' +
-      '<div class="sheet-sub">This replaces everything currently in the app.</div>' +
+    openSheet('<h2>Restore or load a setup</h2>' +
+      '<div class="sheet-sub">Takes a backup file, backup text, or a setup link. ' +
+      'Use this when you cannot tap a link — a home screen app has no address bar.</div>' +
       '<div class="field"><label>Choose a backup file</label><input id="i-file" type="file" accept="application/json,.json"></div>' +
-      '<div class="field"><label>…or paste the backup text</label><textarea id="i-text" rows="6" placeholder="{&quot;version&quot;:1,…}" style="font-size:12px"></textarea></div>' +
+      '<div class="field"><label>…or paste a setup link or backup text</label><textarea id="i-text" rows="6" placeholder="https://…/bills/#add=Rent,300,2026-10-07;…" style="font-size:12px"></textarea></div>' +
       '<button class="btn primary" data-act="do-import" style="margin-bottom:8px">Restore</button>' +
       '<button class="btn ghost" data-act="close-sheet">Cancel</button>',
       function (sheet) {
@@ -1844,16 +1872,18 @@
         });
         $('[data-act="do-import"]', sheet).addEventListener('click', function () {
           var raw = pending || $('#i-text', sheet).value.trim();
-          if (!raw) return toast('⚠️ Pick a file or paste the text');
-          try {
-            var d = JSON.parse(raw);
-            if (!d || !Array.isArray(d.bills)) throw new Error('bad shape');
-            localStorage.setItem(STORE_KEY, JSON.stringify(d));
-            load(); save(); closeSheet(); render();
-            toast('✅ Backup restored — ' + plural(state.bills.length, 'bill') + ' loaded');
-          } catch (err) {
-            toast('⚠️ That doesn\'t look like a Bill Cushion backup');
+          if (!raw) return toast('⚠️ Pick a file or paste a link');
+
+          var d = parsePastedSetup(raw);
+          if (!d) return toast('⚠️ That is not a Bill Cushion backup or setup link');
+
+          // a setup link names only some settings — keep the rest
+          if (!d.settings || !d.settings.roundTo) {
+            d.settings = Object.assign({}, state.settings, d.settings || {});
           }
+          localStorage.setItem(STORE_KEY, JSON.stringify(d));
+          load(); save(); closeSheet(); render();
+          toast('✅ Loaded ' + plural(state.bills.length, 'bill'));
         });
       });
   }
