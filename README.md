@@ -65,6 +65,17 @@ daily rate × funding days left = money still needed
 - **The cushion counts workdays by default** (six of them), so "fully funded before it's
   due" means six *working* days of margin, not six calendar days that a weekend can eat.
   Switch it to calendar days under More.
+- **Unpredictable work is a first-class case.** If you don't know which days you'll earn,
+  set the schedule to *Unpredictable* and say roughly how many days a week you work. Every
+  day can then take money, the expected number of earning days before each due date is
+  scaled by that rate, and six working days of cushion stretches to however long that
+  actually takes — nine calendar days at five a week, fourteen at three. The app also
+  measures what you really averaged over the last four weeks and says so if your estimate
+  is off.
+- **Slack: how many days you can still lose.** Each bill shows how many days you could set
+  nothing aside and still pay on time. It starts at the cushion, drops a day for every idle
+  day, and climbs back when you work more than your estimate — so the cost of a day off is
+  visible before it becomes a problem rather than after.
 - **Bills on a payment plan** can follow a set list of debit dates instead of a day of the
   month — paste the dates in and each payment steps to the next one. Once the list runs
   out it keeps the same rhythm.
