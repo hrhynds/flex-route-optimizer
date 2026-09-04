@@ -959,6 +959,7 @@
       '<p>Add each bill with its amount and due date. This app then tells you exactly what to put aside every workday so each one is fully paid for <strong>' +
       cushionWords() + ' before</strong> it\'s due.</p>' +
       '<button class="btn primary" data-act="add-bill">＋ Add your first bill</button>' +
+      '<button class="btn mt" data-act="import">📋 Paste a setup code</button>' +
       '</div>' +
       '<div class="sep"></div>' +
       '<div class="card-title">Quick add</div>' +
@@ -982,8 +983,9 @@
 
     if (!list.length && !state.bills.length) {
       host.innerHTML = '<div class="empty"><div class="big">🧾</div><h3>No bills yet</h3>' +
-        '<p>Add one to start tracking.</p>' +
-        '<button class="btn primary" data-act="add-bill">＋ Add a bill</button></div>';
+        '<p>Add one to start tracking, or paste a setup code you were sent.</p>' +
+        '<button class="btn primary" data-act="add-bill">＋ Add a bill</button>' +
+        '<button class="btn mt" data-act="import">📋 Paste a setup code</button></div>';
       return;
     }
 
@@ -1270,7 +1272,7 @@
       '</p>' +
       '<div class="btn-row mb"><button class="btn" data-act="export">⬇︎ Save backup</button>' +
       '<button class="btn" data-act="copy-backup">⧉ Copy</button></div>' +
-      '<button class="btn ghost" data-act="import">⬆︎ Restore from backup</button></div>';
+      '<button class="btn ghost" data-act="import">📋 Paste a setup code or backup</button></div>';
 
     html += '<div class="card"><div class="card-title">How the math works</div>' +
       '<p class="small dim">For every bill:</p>' +
@@ -1854,12 +1856,14 @@
   }
 
   function importData() {
-    openSheet('<h2>Restore or load a setup</h2>' +
-      '<div class="sheet-sub">Takes a backup file, backup text, or a setup link. ' +
-      'Use this when you cannot tap a link — a home screen app has no address bar.</div>' +
-      '<div class="field"><label>Choose a backup file</label><input id="i-file" type="file" accept="application/json,.json"></div>' +
-      '<div class="field"><label>…or paste a setup link or backup text</label><textarea id="i-text" rows="6" placeholder="https://…/bills/#add=Rent,300,2026-10-07;…" style="font-size:12px"></textarea></div>' +
-      '<button class="btn primary" data-act="do-import" style="margin-bottom:8px">Restore</button>' +
+    openSheet('<h2>Paste a setup code</h2>' +
+      '<div class="sheet-sub">Paste a setup code, a setup link, or a backup you saved earlier. ' +
+      'Any of them works — the whole link, or just the part after the #.</div>' +
+      '<div class="field"><label>Paste it here</label>' +
+      '<textarea id="i-text" rows="6" placeholder="add=Rent,300,2026-10-07;Phone,100,2026-10-02" ' +
+      'style="font-size:12px" autocapitalize="off" autocorrect="off" spellcheck="false"></textarea></div>' +
+      '<div class="field"><label>…or choose a backup file</label><input id="i-file" type="file" accept="application/json,.json"></div>' +
+      '<button class="btn primary" data-act="do-import" style="margin-bottom:8px">Load it</button>' +
       '<button class="btn ghost" data-act="close-sheet">Cancel</button>',
       function (sheet) {
         var pending = null;
