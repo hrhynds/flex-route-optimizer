@@ -32,8 +32,16 @@ before you are working for nothing. It's on the Today screen while the day is st
 short, and as a dashed line across the 14-day chart.
 
 Nothing is a lump sum. A job is logged with its amount, service, customer and how it
-was paid; an expense with its category. Both are editable and deletable, and every
-figure in the app re-runs the moment either changes.
+was paid; a cost with what it was and what kind. Both are editable and deletable, and
+every figure re-runs the moment either changes.
+
+**Costs are per day, never a standing amount.** Some days you buy wax, most days you
+buy nothing — a day with nothing logged costs nothing, and no background figure is
+quietly assumed. Anything bought before comes back as a one-tap chip carrying the price
+last paid, so a repeat purchase is one tap rather than typing it out again. Tapping a
+cost category on the Business tab opens that category on its own: what it has cost this
+month and all time, what you buy ranked by spend with repeat counts, how many of your
+working days actually involved buying any, and every purchase, editable.
 
 **Money that isn't yours** is tracked as a running balance rather than a vague
 feeling — what has built up for your partner, and what tax is being held. Record a
