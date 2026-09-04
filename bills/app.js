@@ -221,6 +221,10 @@
   function activeBills() {
     return state.bills.filter(function (b) { return !b.archived; });
   }
+  function isDated(b) { return !!b.dueDate && /^\d{4}-\d{2}-\d{2}$/.test(b.dueDate); }
+  /** Bills the maths can actually price. An undated bill is parked, not counted. */
+  function datedBills() { return activeBills().filter(isDated); }
+  function undatedBills() { return activeBills().filter(function (b) { return !isDated(b); }); }
   function billById(id) {
     for (var i = 0; i < state.bills.length; i++) if (state.bills[i].id === id) return state.bills[i];
     return null;
@@ -313,7 +317,7 @@
    * Past/today use real contributions; future days assume the plan is followed.
    */
   function simulate(startISO, endISO) {
-    var bills = activeBills();
+    var bills = datedBills();
     var rows = bills.map(function (b) {
       return { b: b, target: targetDate(b), saved: savedFor(b, startISO) };
     });
@@ -470,7 +474,7 @@
   }
 
   function sortedStatuses() {
-    return activeBills().map(statusOf).sort(function (a, b) {
+    return datedBills().map(statusOf).sort(function (a, b) {
       var rank = { urgent: 0, behind: 1, ontrack: 2, funded: 3 };
       if (rank[a.key] !== rank[b.key]) return rank[a.key] - rank[b.key];
       return diffDays(b.target, a.target);
@@ -740,6 +744,22 @@
 
     if (!bills.length) { host.innerHTML = welcomeHTML(); return; }
 
+    var undated = undatedBills();
+    var undatedBanner = undated.length
+      ? '<div class="banner warn"><span>📅</span><div><strong>' +
+        plural(undated.length, 'bill') + ' still ' + (undated.length === 1 ? 'needs' : 'need') +
+        ' a due date</strong>' + undated.map(function (u) { return esc(u.name); }).join(', ') +
+        ' — not counted in today\'s number yet. Set the date on the Bills tab.</div></div>'
+      : '';
+
+    if (!datedBills().length) {
+      host.innerHTML = undatedBanner +
+        '<div class="empty"><div class="big">📅</div><h3>Add the due dates</h3>' +
+        '<p>Your bills and amounts are in. Give each one a due date and the daily amount appears.</p>' +
+        '<button class="btn primary" data-act="goto-bills">Set due dates</button></div>';
+      return;
+    }
+
     var day = todayPlan();
     var rec = state.days[t];
     var done = rec && rec.completed;
@@ -778,6 +798,7 @@
       sub = actual > 0.004 ? 'already set aside' : 'every bill is fully funded';
     }
 
+    html += undatedBanner;
     html += '<div class="' + cls + '">' +
       '<div class="hero-eyebrow">' + eyebrow + '</div>' +
       '<div class="hero-amount">' + amount + '</div>' +
@@ -900,6 +921,11 @@
       return;
     }
 
+    if (undatedBills().length && !list.length) {
+      html += '<div class="banner warn"><span>📅</span><div><strong>Set a due date on each bill</strong>' +
+        'Amounts are in. Tap a bill, pick when it\'s due, and the daily figure appears.</div></div>';
+    }
+
     var totalAmt = list.reduce(function (s, x) { return s + x.bill.amount; }, 0);
     var totalSaved = list.reduce(function (s, x) { return s + x.saved; }, 0);
     var perDayAll = list.reduce(function (s, x) { return s + x.perDay; }, 0);
@@ -918,6 +944,14 @@
     html += '</div>';
 
     list.forEach(function (s) { html += billCardHTML(s); });
+
+    undatedBills().forEach(function (b) {
+      html += '<button class="bill s-behind" data-act="open-bill" data-id="' + b.id + '">' +
+        '<div class="bill-top"><div class="bill-name">' + esc(b.icon || '🧾') + ' ' + esc(b.name) + '</div>' +
+        '<div class="bill-amt">' + money(b.amount) + '</div></div>' +
+        '<div class="bill-meta"><span class="pill behind">needs a date</span>' +
+        '<span>Tap to set when it\'s due — then it joins your daily amount.</span></div></button>';
+    });
 
     var archived = state.bills.filter(function (b) { return b.archived; });
     if (archived.length) {
@@ -976,7 +1010,7 @@
 
   function renderPlan() {
     var host = $('#view-plan');
-    if (!activeBills().length) {
+    if (!datedBills().length) {
       host.innerHTML = '<div class="empty"><div class="big">🗓️</div><h3>Nothing to plan yet</h3>' +
         '<p>Add a bill and your daily schedule shows up here.</p>' +
         '<button class="btn primary" data-act="add-bill">＋ Add a bill</button></div>';
@@ -1269,7 +1303,12 @@
         var cRaw = $('#f-cushion', sheet).value;
         var cd = cRaw === '' ? state.settings.cushionDays : +cRaw;
         var out = $('#f-preview', sheet);
-        if (!amt || !due) { out.textContent = 'Enter an amount and due date to see the daily number.'; return; }
+        if (!amt || !due) {
+          out.textContent = amt
+            ? 'Add a due date to see the daily number — you can leave it blank for now and set it later.'
+            : 'Enter an amount and due date to see the daily number.';
+          return;
+        }
         var tgt = cushionDateFor(due, cd);
         var n = countFundingDays(todayISO(), tgt);
         if (n <= 0) {
@@ -1303,7 +1342,7 @@
 
         if (!name) return toast('⚠️ Give the bill a name');
         if (!(amount > 0)) return toast('⚠️ Enter an amount over $0');
-        if (!due || !/^\d{4}-\d{2}-\d{2}$/.test(due)) return toast('⚠️ Pick a due date');
+        if (due && !/^\d{4}-\d{2}-\d{2}$/.test(due)) return toast('⚠️ That due date looks wrong');
 
         var sched = [];
         if (rec === 'schedule') {
@@ -1316,7 +1355,7 @@
         if (isNew) {
           state.bills.push({
             id: uid(), name: name, icon: icon, amount: amount, dueDate: due,
-            recurrence: rec, scheduleDates: sched, anchorDay: fromISO(due).getDate(),
+            recurrence: rec, scheduleDates: sched, anchorDay: due ? fromISO(due).getDate() : null,
             cushionDays: cRaw === '' ? null : +cRaw,
             cycle: 0, cycleStart: todayISO(), createdAt: todayISO(),
             archived: false, paidHistory: []
@@ -1324,7 +1363,7 @@
         } else {
           b.name = name; b.icon = icon; b.amount = amount;
           b.dueDate = due; b.recurrence = rec; b.scheduleDates = sched;
-          b.anchorDay = fromISO(due).getDate();
+          b.anchorDay = due ? fromISO(due).getDate() : null;
           b.cushionDays = cRaw === '' ? null : +cRaw;
         }
         save(); closeSheet(); render();
@@ -1341,15 +1380,22 @@
   /* ---- Bill detail ------------------------------------------------------- */
 
   function billDetailSheet(b) {
-    var s = statusOf(b);
+    var dated = isDated(b);
+    var s = dated ? statusOf(b) : null;
     var hist = (idx()[b.id] || []).filter(function (c) { return c.cycle === b.cycle; })
       .sort(function (x, y) { return y.ts - x.ts; });
 
     var html = '<h2>' + esc(b.icon || '🧾') + ' ' + esc(b.name) + '</h2>' +
-      '<div class="sheet-sub">' + money(b.amount) + ' due ' + fmtDate(b.dueDate, 'dow') +
-      ' · ' + relDay(b.dueDate) + '</div>';
+      '<div class="sheet-sub">' + money(b.amount) +
+      (dated ? ' due ' + fmtDate(b.dueDate, 'dow') + ' · ' + relDay(b.dueDate)
+             : ' · no due date set yet') + '</div>';
 
-    html += '<div class="card tight s-' + s.key + '">' +
+    if (!dated) {
+      html += '<div class="banner warn"><span>📅</span><div><strong>Waiting on a due date</strong>' +
+        'Pick when this is due and it joins your daily amount straight away.</div></div>';
+    }
+
+    if (dated) html += '<div class="card tight s-' + s.key + '">' +
       '<div style="display:flex;justify-content:space-between;align-items:baseline">' +
       '<div style="font-size:1.5rem;font-weight:800" class="money">' + money(s.saved) + '</div>' +
       '<div class="dim">of ' + money(b.amount) + ' (' + pct(s.progress) + '%)</div></div>' +
@@ -1380,8 +1426,10 @@
       '<button class="btn primary" id="q-save" disabled style="margin-top:10px">Save changes</button>' +
       '</div>';
 
-    html += '<div class="list-row"><div>Still needed</div><div class="lr-amt">' + money(s.remaining) + '</div></div>' +
-      (s.key === 'behind' ? '<div class="list-row"><div>Behind pace by</div><div class="lr-amt">' + money(s.shortfall) + '</div></div>' : '') +
+    html += (dated
+        ? '<div class="list-row"><div>Still needed</div><div class="lr-amt">' + money(s.remaining) + '</div></div>' +
+          (s.key === 'behind' ? '<div class="list-row"><div>Behind pace by</div><div class="lr-amt">' + money(s.shortfall) + '</div></div>' : '')
+        : '') +
       '<div class="list-row"><div>Repeats</div><div class="lr-amt">' +
       (RECURRENCE.filter(function (r) { return r.v === b.recurrence; })[0] || { label: '—' }).label + '</div></div>';
 
@@ -1708,6 +1756,71 @@
       });
   }
 
+  /**
+   * A setup link: billcushion.../#import=<url-safe base64 of a backup>.
+   * Lets a whole list of bills arrive in one tap instead of being typed on a phone.
+   */
+  function checkImportLink() {
+    var m = (location.hash || '').match(/[#&]import=([A-Za-z0-9+/=_-]+)/);
+    if (!m) return;
+
+    var clearHash = function () {
+      try { history.replaceState(null, '', location.pathname + location.search); }
+      catch (e) { location.hash = ''; }
+    };
+
+    var data;
+    try {
+      var b64 = m[1].replace(/-/g, '+').replace(/_/g, '/');
+      data = JSON.parse(decodeURIComponent(escape(atob(b64))));
+    } catch (e) { data = null; }
+
+    if (!data || !Array.isArray(data.bills)) {
+      clearHash();
+      toast('⚠️ That setup link is damaged — nothing was changed');
+      return;
+    }
+    clearHash();
+
+    var names = data.bills.map(function (b) { return esc(b.name); }).join(', ');
+    var total = data.bills.reduce(function (a, b) { return a + (+b.amount || 0); }, 0);
+    var body = '<strong>' + plural(data.bills.length, 'bill') + ' · ' + money(total) + ' a cycle</strong>' +
+      names + '<br><br>' +
+      (state.bills.length
+        ? 'You already have ' + plural(state.bills.length, 'bill') + ' in here.'
+        : 'Nothing is in the app yet.');
+
+    var actions = [{
+      label: state.bills.length ? 'Replace everything' : 'Load these bills',
+      cls: 'primary',
+      fn: function () {
+        localStorage.setItem(STORE_KEY, JSON.stringify(data));
+        load(); save(); view = 'bills'; render();
+        toast('✅ Loaded ' + plural(state.bills.length, 'bill'));
+      }
+    }];
+    if (state.bills.length) {
+      actions.push({
+        label: 'Add them to what I have',
+        fn: function () {
+          data.bills.forEach(function (b) {
+            var copy = JSON.parse(JSON.stringify(b));
+            copy.id = uid();
+            copy.cycleStart = todayISO();
+            copy.createdAt = todayISO();
+            copy.cycle = 0;
+            copy.paidHistory = [];
+            state.bills.push(copy);
+          });
+          save(); view = 'bills'; render();
+          toast('✅ Added ' + plural(data.bills.length, 'bill'));
+        }
+      });
+    }
+
+    confirmSheet({ title: 'Load this setup?', body: body, actions: actions });
+  }
+
   /* ---------------------------------------------------------------------------
      10. Toast
      ------------------------------------------------------------------------ */
@@ -1900,6 +2013,8 @@
         save(); render();
         break;
 
+      case 'goto-bills': view = 'bills'; render(); window.scrollTo({ top: 0 }); break;
+
       case 'toggle-archived': showArchived = !showArchived; render(); break;
 
       case 'cal-prev':
@@ -1954,6 +2069,11 @@
 
   load();
   render();
+  checkImportLink();
+
+  // A setup link tapped while the app is already open only changes the
+  // fragment — no reload fires, so watch for it directly.
+  window.addEventListener('hashchange', checkImportLink);
 
   if ('serviceWorker' in navigator) {
     window.addEventListener('load', function () {
