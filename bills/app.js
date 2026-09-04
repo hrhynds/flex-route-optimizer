@@ -1648,8 +1648,8 @@
       '<div class="lr-sub">' + (pp.mode === 'none' ? 'Everything after costs is yours' : partnerRule()) + '</div></div>' +
       '<div class="lr-amt">' + (pp.mode === 'none' ? '—' : money(owedTo('partner')) + '<div class="lr-sub" style="text-align:right;font-weight:500">owed</div>') + '</div></div>' +
       '<div class="list-row"><div><div>Tax put by</div>' +
-      '<div class="lr-sub">' + (s.taxRate ? s.taxRate + '% of profit' : 'Not set aside') + '</div></div>' +
-      '<div class="lr-amt">' + (s.taxRate ? money(owedTo('tax')) + '<div class="lr-sub" style="text-align:right;font-weight:500">held</div>' : '—') + '</div></div>' +
+      '<div class="lr-sub">' + (s.taxRate ? s.taxRate + '% of what\'s left' : 'Off — nothing held back') + '</div></div>' +
+      '<div class="lr-amt">' + (s.taxRate ? money(owedTo('tax')) + '<div class="lr-sub" style="text-align:right;font-weight:500">held</div>' : 'Off') + '</div></div>' +
       '<button class="btn mt" data-act="business-setup">Change splits &amp; tax</button></div>';
 
     html += '<div class="card"><div class="card-title">Your work schedule</div>' +
@@ -2393,26 +2393,41 @@
       '<input id="b-value" type="text" inputmode="decimal" value="' + (p.value || '') + '"></div>' +
       '<div class="hint mb" id="b-preview"></div>' +
       '<div class="sep"></div>' +
-      '<div class="field"><label>Put by for tax</label>' +
+      '<div class="switch-row">' +
+      '<div><div class="sr-label">Put money by for tax</div>' +
+      '<div class="sr-hint">Off unless you want it held back.</div></div>' +
+      '<button class="switch' + (state.settings.taxRate > 0 ? ' on' : '') + '" id="b-tax-on"></button>' +
+      '</div>' +
+      '<div class="field" id="b-tax-wrap"' + (state.settings.taxRate > 0 ? '' : ' style="display:none"') + '>' +
+      '<label>How much of what\'s left</label>' +
       '<div class="chip-row" id="b-tax">' +
-      [0, 10, 15, 20, 25, 30].map(function (n) {
+      [10, 15, 20, 25, 30].map(function (n) {
         return '<button type="button" class="chip' + (state.settings.taxRate === n ? ' on' : '') +
-          '" data-t="' + n + '">' + (n === 0 ? 'none' : n + '%') + '</button>';
+          '" data-t="' + n + '">' + n + '%</button>';
       }).join('') + '</div>' +
-      '<div class="hint">Taken off what\'s left after costs and the cut. Self-employed tax is the ' +
-      'thing that catches people out — this holds it back so it is there when it is asked for.</div></div>' +
+      '<div class="hint">Taken off what\'s left after costs and the cut, and held as a balance ' +
+      'until you record paying it.</div></div>' +
       '<button class="btn primary" id="b-save" style="margin-bottom:8px">Save</button>' +
       '<button class="btn ghost" data-act="close-sheet">Cancel</button>';
 
     openSheet(html, function (sheet) {
       var tax = state.settings.taxRate || 0;
-      $$('#b-tax .chip', sheet).forEach(function (c) {
-        c.addEventListener('click', function () {
-          tax = +c.dataset.t;
-          $$('#b-tax .chip', sheet).forEach(function (x) { x.classList.remove('on'); });
-          c.classList.add('on');
-          preview();
+      var taxOn = tax > 0;
+      var lastRate = tax > 0 ? tax : 15;      // remembered while the switch is off
+
+      var taxSwitch = $('#b-tax-on', sheet);
+      function syncTax() {
+        taxSwitch.classList.toggle('on', taxOn);
+        $('#b-tax-wrap', sheet).style.display = taxOn ? '' : 'none';
+        tax = taxOn ? lastRate : 0;
+        $$('#b-tax .chip', sheet).forEach(function (x) {
+          x.classList.toggle('on', +x.dataset.t === lastRate);
         });
+        preview();
+      }
+      taxSwitch.addEventListener('click', function () { taxOn = !taxOn; syncTax(); });
+      $$('#b-tax .chip', sheet).forEach(function (c) {
+        c.addEventListener('click', function () { lastRate = +c.dataset.t; taxOn = true; syncTax(); });
       });
 
       function preview() {
@@ -2442,7 +2457,7 @@
         $(sel, sheet).addEventListener('input', preview);
         $(sel, sheet).addEventListener('change', preview);
       });
-      preview();
+      syncTax();
 
       $('#b-save', sheet).addEventListener('click', function () {
         var mode = $('#b-mode', sheet).value;
@@ -2673,11 +2688,14 @@
    */
   function parseAddLink(hash) {
     var m = hash.match(/[#&]add=([^&]*)/);
-    if (!m) return null;
+    var hasSettings = /[#&](w|c|p|tax)=/.test(hash);
+    if (!m && !hasSettings) return null;
 
-    var txt;
-    try { txt = decodeURIComponent(m[1]); } catch (e) { txt = m[1]; }
-    txt = txt.replace(/\+/g, ' ');
+    var txt = '';
+    if (m) {
+      try { txt = decodeURIComponent(m[1]); } catch (e) { txt = m[1]; }
+      txt = txt.replace(/\+/g, ' ');
+    }
 
     var bills = [];
     txt.split(';').forEach(function (chunk) {
@@ -2699,14 +2717,62 @@
       if (sched.length) { b.recurrence = 'schedule'; b.scheduleDates = sched.sort(); }
       bills.push(b);
     });
-    if (!bills.length) return null;
+    var data = {
+      version: 2, bills: bills, settings: {},
+      settingsOnly: !bills.length,
+      meta: { created: todayISO() }
+    };
 
-    var data = { version: 1, bills: bills, settings: {}, meta: { created: todayISO() } };
     var wk = hash.match(/[#&]w=(\d)/);
     if (wk) { data.settings.countMode = 'estimate'; data.settings.daysPerWeek = clamp(+wk[1], 1, 7); }
+
     var cu = hash.match(/[#&]c=(\d{1,2})/);
     if (cu) { data.settings.cushionDays = clamp(+cu[1], 0, 60); data.settings.cushionMode = 'workdays'; }
+
+    // p=Name:mode:value  — who takes a cut and how
+    var pm = hash.match(/[#&]p=([^&]*)/);
+    if (pm) {
+      var raw;
+      try { raw = decodeURIComponent(pm[1]); } catch (e) { raw = pm[1]; }
+      var f = raw.replace(/\+/g, ' ').split(':');
+      var mode = (f[1] || 'none').trim();
+      var known = PARTNER_MODES.filter(function (x) { return x.v === mode; }).length;
+      if (known) {
+        data.settings.partner = {
+          name: (f[0] || 'Partner').trim() || 'Partner',
+          mode: mode,
+          value: round2(parseFloat(f[2])) || 0
+        };
+        if (mode !== 'none' && !(data.settings.partner.value > 0)) data.settings.partner.mode = 'none';
+      }
+    }
+
+    // tax=0 turns it off; tax=20 sets the rate
+    var tx = hash.match(/[#&]tax=(\d{1,2})/);
+    if (tx) data.settings.taxRate = clamp(+tx[1], 0, 95);
+
+    if (!bills.length && !Object.keys(data.settings).length) return null;
     return data;
+  }
+
+  /** Describe a settings-only code in plain words, so it can be confirmed. */
+  function describeSettings(st) {
+    var out = [];
+    if (st.partner) {
+      out.push(st.partner.mode === 'none'
+        ? 'Nobody takes a cut'
+        : esc(st.partner.name) + ' takes ' +
+          (st.partner.mode === 'pctRevenue' ? st.partner.value + '% of takings'
+            : st.partner.mode === 'pctProfit' ? st.partner.value + '% of profit'
+            : st.partner.mode === 'perJob' ? money(st.partner.value) + ' a job'
+            : money(st.partner.value) + ' a working day'));
+    }
+    if (st.taxRate != null) {
+      out.push(st.taxRate > 0 ? 'Tax held back at ' + st.taxRate + '%' : 'Tax off — nothing held back');
+    }
+    if (st.daysPerWeek) out.push('About ' + plural(st.daysPerWeek, 'working day') + ' a week');
+    if (st.cushionDays != null) out.push('Cushion of ' + plural(st.cushionDays, 'working day'));
+    return out;
   }
 
   function checkImportLink() {
@@ -2734,6 +2800,24 @@
       return;
     }
     clearHash();
+
+    if (data.settingsOnly) {
+      var lines = describeSettings(data.settings);
+      confirmSheet({
+        title: 'Change these settings?',
+        body: '<strong>' + lines.join('<br>') + '</strong><br><br>' +
+          'Your bills, jobs and expenses are left exactly as they are.',
+        actions: [{
+          label: 'Apply', cls: 'primary',
+          fn: function () {
+            Object.keys(data.settings).forEach(function (k) { state.settings[k] = data.settings[k]; });
+            save(); render();
+            toast('✅ Settings updated');
+          }
+        }]
+      });
+      return;
+    }
 
     var names = data.bills.map(function (b) { return esc(b.name); }).join(', ');
     var total = data.bills.reduce(function (a, b) { return a + (+b.amount || 0); }, 0);
