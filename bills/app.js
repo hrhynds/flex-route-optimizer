@@ -736,10 +736,14 @@
     return round2(Math.max(0, base) * taxRate());
   }
 
-  /** Today's share of the bills — what the cushion plan asks for. */
+  /**
+   * Today's share of the bills — what is STILL owed today, after anything
+   * already banked toward them. Using the original plan here would charge
+   * the day twice for bill money that was already set aside separately.
+   */
   function billShareOn(iso) {
     var day = simulate(iso, iso)[iso];
-    return day ? day.plannedTotal : 0;
+    return day ? day.remainingTotal : 0;
   }
 
   /** The whole chain for one day. */
