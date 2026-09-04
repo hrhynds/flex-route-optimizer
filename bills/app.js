@@ -1133,9 +1133,11 @@
         else if (funding && diffDays(state.meta.created, iso) >= 0) { cls += ' missed'; mark = '·'; }
         cls += ' past';
       } else {
-        amt = cell ? (iso === t ? cell.remainingTotal : cell.remainingTotal) : 0;
+        amt = cell ? cell.remainingTotal : 0;
         monthRequired += amt;
-        if (rec && rec.completed) { cls += ' done'; mark = '✓'; monthActual += dayActual(iso); }
+        // money banked today counts whether or not the day was marked complete
+        monthActual += dayActual(iso);
+        if (rec && rec.completed) { cls += ' done'; mark = '✓'; }
       }
 
       html += '<button class="' + cls + '" data-act="open-day" data-date="' + iso + '">' +
