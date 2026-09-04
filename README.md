@@ -22,7 +22,7 @@ Every day runs the same way:
 money in                       what jobs brought in
 − what it cost you             supplies, fuel, equipment
 − your partner's cut           % of takings, % of profit, per job, or per day
-− tax put by                   a share of what's left, held back
+− tax put by                   off by default; a share of what's left when on
 − today's share of the bills   the cushion, below
 = what you keep
 ```
@@ -129,13 +129,23 @@ damaged link changes nothing, and both work whether or not the app is already op
 through a chat app:
 
 ```
-.../bills/#add=Name,amount,YYYY-MM-DD[,date1/date2/...];Name,amount,...&w=5&c=6
+.../bills/#add=Name,amount,YYYY-MM-DD[,date1/date2/...];Name,amount,...&w=5&c=6&p=Logan:perJob:40&tax=0
 ```
 
-`+` reads as a space, the optional fourth field is a list of payment dates, `w=` sets an
-unpredictable schedule at that many days a week, and `c=` sets the cushion. Rows that
-don't parse are skipped rather than failing the whole link; a row with no date arrives as
-"needs a date". Icons are worked out from the names.
+`+` reads as a space, the optional fourth field is a list of payment dates, and the
+parameters set: `w=` days worked a week, `c=` the cushion, `p=` who takes a cut
+(`Name:mode:value`, where mode is `pctRevenue`, `pctProfit`, `perJob`, `perDay` or
+`none`), `tax=` the rate held back (`0` turns it off). Rows that don't parse are skipped
+rather than failing the whole link; a row with no date arrives as "needs a date". Icons
+are worked out from the names.
+
+**Settings-only** — the same parameters with no `add=` at all changes just those
+settings, names in plain words what it is about to do, and leaves bills, jobs and
+expenses exactly as they are:
+
+```
+.../bills/#p=Logan:perJob:40&tax=0
+```
 
 **Long form** — `#import=<url-safe base64 of a full backup>`, which carries everything a
 backup does including contribution history.
