@@ -18,7 +18,7 @@ Every bill has to be **fully funded before its due date**, not on it. That gap i
 cushion — 5 days by default.
 
 ```
-cushion date = due date − cushion days
+cushion date = due date − cushion (counted in workdays, or calendar days)
 per day      = money still needed ÷ funding days left until the cushion date
 ```
 
@@ -60,6 +60,14 @@ daily rate × funding days left = money still needed
 
 - **Days off cost nothing.** Only the days you work carry a target. Any single day can
   be flipped between workday and day off from the calendar.
+- **The cushion counts workdays by default** (six of them), so "fully funded before it's
+  due" means six *working* days of margin, not six calendar days that a weekend can eat.
+  Switch it to calendar days under More.
+- **Bills on a payment plan** can follow a set list of debit dates instead of a day of the
+  month — paste the dates in and each payment steps to the next one. Once the list runs
+  out it keeps the same rhythm.
+- **Money you already have** goes in under More → "Money I already have set aside". It
+  fills the most urgent bills first and lowers every daily amount from there.
 - **Overpaying is never lost.** It fills every bill, and anything beyond that is banked
   as buffer.
 - **Rounding.** The daily ask can round up to the nearest $1, $5 or $10 for easier
