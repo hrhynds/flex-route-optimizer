@@ -90,11 +90,28 @@ daily rate × funding days left = money still needed
 
 ### Setup links
 
-A whole list of bills can arrive in one tap. A link of the form
-`.../bills/#import=<url-safe base64 of a backup>` opens the app, shows what it contains,
-and asks before doing anything — with the choice to replace what's there or add to it.
-The fragment is cleared afterwards so a refresh won't ask twice, and a damaged link
-changes nothing. It works whether or not the app is already open.
+A whole list of bills can arrive in one tap. Two forms, both of which open the app, show
+what the link contains, and ask before doing anything — with the choice to replace what's
+there or add to it. The fragment is cleared afterwards so a refresh won't ask twice, a
+damaged link changes nothing, and both work whether or not the app is already open.
+
+**Short form** — readable, and about a fifth the length, so it survives being pasted
+through a chat app:
+
+```
+.../bills/#add=Name,amount,YYYY-MM-DD[,date1/date2/...];Name,amount,...&w=5&c=6
+```
+
+`+` reads as a space, the optional fourth field is a list of payment dates, `w=` sets an
+unpredictable schedule at that many days a week, and `c=` sets the cushion. Rows that
+don't parse are skipped rather than failing the whole link; a row with no date arrives as
+"needs a date". Icons are worked out from the names.
+
+**Long form** — `#import=<url-safe base64 of a full backup>`, which carries everything a
+backup does including contribution history.
+
+Bill data rides in the URL *fragment*, which browsers never send to the server — so a
+setup link doesn't leak amounts into anyone's access logs.
 
 ### Add it to your iPhone
 
