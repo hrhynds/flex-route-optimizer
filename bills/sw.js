@@ -1,5 +1,6 @@
 /* Bill Cushion service worker — offline shell, network-first so updates land fast. */
-const CACHE = 'billcushion-v1';
+const PREFIX = 'billcushion-';
+const CACHE = PREFIX + 'v1';
 const SHELL = [
   './',
   './index.html',
@@ -22,7 +23,11 @@ self.addEventListener('install', e => {
 self.addEventListener('activate', e => {
   e.waitUntil(
     caches.keys()
-      .then(keys => Promise.all(keys.filter(k => k !== CACHE).map(k => caches.delete(k))))
+      // Only evict our own stale caches — the sibling app on this origin
+      // shares the same cache store and must keep its shell.
+      .then(keys => Promise.all(
+        keys.filter(k => k.startsWith(PREFIX) && k !== CACHE).map(k => caches.delete(k))
+      ))
       .then(() => self.clients.claim())
   );
 });
