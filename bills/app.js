@@ -21,6 +21,7 @@
      ------------------------------------------------------------------------ */
 
   var STORE_KEY = 'billcushion.v1';
+  var BACKUP_KEY = 'billcushion.lastgood';   // the state as of the last clean open
   var MS_DAY = 86400000;
   var DOW_LONG = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
   var DOW_MID = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
@@ -179,15 +180,40 @@
   var lastUndo = null;
   var toastTimer = null;
   var view = 'today';
+  var loadState = 'empty';   // 'ok' | 'empty' | 'corrupt' | 'blocked'
+  var saveWorks = true;      // set false when a write does not read back
   var calMonth = null;     // {y, m} for the plan calendar
   var showArchived = false;
 
   function load() {
+    var raw;
     try {
-      var raw = localStorage.getItem(STORE_KEY);
-      if (!raw) return;
-      var d = JSON.parse(raw);
-      if (!d || typeof d !== 'object') return;
+      raw = localStorage.getItem(STORE_KEY);
+    } catch (e) {
+      // storage itself is unavailable — a private tab, or blocked site data
+      loadState = 'blocked';
+      console.warn('Storage unavailable', e);
+      return;
+    }
+
+    if (!raw) { loadState = 'empty'; return; }
+
+    var d;
+    try {
+      d = JSON.parse(raw);
+    } catch (e) {
+      // Readable but not parseable. Leave it exactly where it is — overwriting
+      // it with defaults would destroy whatever might still be recoverable.
+      loadState = 'corrupt';
+      console.warn('Saved data could not be read', e);
+      return;
+    }
+    if (!d || typeof d !== 'object' || !Array.isArray(d.bills)) {
+      loadState = 'corrupt';
+      return;
+    }
+
+    try {
       var base = defaults();
       state = {
         version: 2,
@@ -215,17 +241,41 @@
       // expenses used to carry only a note; the note was always the item
       state.expenses.forEach(function (e) { if (!e.item) e.item = e.note || ''; });
       if (!state.settings.workdays.length) state.settings.workdays = [1, 2, 3, 4, 5];
+      loadState = 'ok';
+
+      // Keep the last clean open as a fallback, so a bad write later today
+      // still has something to fall back to.
+      if (state.bills.length || state.jobs.length || state.expenses.length) {
+        try { localStorage.setItem(BACKUP_KEY, raw); } catch (e2) { /* not fatal */ }
+      }
     } catch (e) {
+      loadState = 'corrupt';
       console.warn('Could not read saved data', e);
     }
   }
 
+  /** Is there a usable fallback copy? */
+  function lastGood() {
+    try {
+      var raw = localStorage.getItem(BACKUP_KEY);
+      if (!raw) return null;
+      var d = JSON.parse(raw);
+      return d && Array.isArray(d.bills) ? { raw: raw, data: d } : null;
+    } catch (e) { return null; }
+  }
+
   function save() {
     rev++;
+    var payload = JSON.stringify(state);
     try {
-      localStorage.setItem(STORE_KEY, JSON.stringify(state));
+      localStorage.setItem(STORE_KEY, payload);
+      // Trust nothing: a write that does not read back has not happened.
+      saveWorks = localStorage.getItem(STORE_KEY) === payload;
     } catch (e) {
-      toast('⚠️ Could not save — device storage is full or blocked');
+      saveWorks = false;
+    }
+    if (!saveWorks) {
+      toast('⚠️ This browser is not saving — see More for how to fix it');
     }
   }
 
@@ -1041,6 +1091,12 @@
     var actual = dayActual(t);
     var html = '';
 
+    if (!saveWorks || loadState === 'blocked') {
+      html += '<div class="banner bad"><span>🚫</span><div><strong>This browser is not saving anything</strong>' +
+        'Nothing you enter will still be here next time. The usual cause is a Private ' +
+        'browsing tab — open the app in a normal tab instead. See More for the details.</div></div>';
+    }
+
     var undated = undatedBills();
     if (undated.length) {
       html += '<div class="banner warn"><span>📅</span><div><strong>' +
@@ -1764,6 +1820,34 @@
       '<div class="list-row"><div><div>Days logged</div></div><div class="lr-amt">' +
       Object.keys(state.days).length + '</div></div>' +
       '<button class="btn mt" data-act="opening-balance">＋ Money I already have set aside</button></div>';
+
+    var good = lastGood();
+    var storeBytes = 0;
+    try { storeBytes = (localStorage.getItem(STORE_KEY) || '').length; } catch (e) {}
+
+    html += '<div class="card"><div class="card-title">Is it saving?</div>' +
+      '<div class="list-row"><div><div>' +
+      (saveWorks && loadState !== 'blocked' ? '✅ Yes — this device is storing your data' :
+        '🚫 No — nothing is being kept') + '</div>' +
+      '<div class="lr-sub">' +
+      (saveWorks && loadState !== 'blocked'
+        ? plural(state.bills.length, 'bill') + ', ' + plural(state.jobs.length, 'job') + ', ' +
+          plural(state.expenses.length, 'cost') + ' held here'
+        : 'Almost always a Private browsing tab. Open the app in a normal Safari tab and ' +
+          'it will start saving.') +
+      '</div></div><div class="lr-amt tiny faint">' +
+      (storeBytes ? Math.round(storeBytes / 1024 * 10) / 10 + ' KB' : '—') + '</div></div>' +
+      (good ? '<div class="list-row"><div><div>Fallback copy</div>' +
+        '<div class="lr-sub">From the last clean open · ' + plural(good.data.bills.length, 'bill') +
+        '</div></div><div class="lr-amt tiny faint">kept</div></div>' : '') +
+      '<div class="hint mt">Your data lives in this browser only. It is not on the internet, ' +
+      'so clearing Safari data erases it — and the app on your Home Screen keeps its own ' +
+      'separate copy from Safari.</div></div>';
+
+    html += '<div class="card"><div class="card-title">Your setup code</div>' +
+      '<p class="small dim mb">The quickest way back if anything is ever lost: copy this and ' +
+      'keep it in Notes. Pasting it into any copy of the app rebuilds your bills and splits.</p>' +
+      '<button class="btn primary" data-act="my-code">⧉ Copy my setup code</button></div>';
 
     html += '<div class="card"><div class="card-title">Backup</div>' +
       '<p class="small dim mb">Everything is stored on this device only. Clearing Safari data wipes it — ' +
@@ -2996,11 +3080,118 @@
     confirmSheet({ title: 'Load this setup?', body: body, actions: actions });
   }
 
+  /**
+   * If the saved data could not be read, say so and offer the last clean copy.
+   * Never silently present an empty app to someone who had data in it.
+   */
+  function offerRecovery() {
+    if (loadState !== 'corrupt') return;
+    var good = lastGood();
+
+    var actions = [];
+    if (good) {
+      actions.push({
+        label: 'Restore ' + plural(good.data.bills.length, 'bill') + ' from the last good copy',
+        cls: 'primary',
+        fn: function () {
+          try { localStorage.setItem(STORE_KEY, good.raw); } catch (e) {}
+          loadState = 'empty'; load(); save(); render();
+          toast('✅ Restored ' + plural(state.bills.length, 'bill'));
+        }
+      });
+    }
+    actions.push({
+      label: 'Start fresh',
+      cls: good ? '' : 'primary',
+      fn: function () {
+        state = defaults();
+        loadState = 'empty'; save(); render();
+        toast('Started fresh');
+      }
+    });
+    actions.push({
+      label: 'Paste a setup code instead',
+      fn: function () { importData(); }
+    });
+
+    confirmSheet({
+      title: 'Your saved data could not be read',
+      body: 'Something went wrong with the copy stored on this device. ' +
+        '<strong>Nothing has been deleted</strong> — it is still there, just unreadable.' +
+        (good
+          ? '<br><br>There is a clean copy from the last time the app opened properly.'
+          : '<br><br>There is no fallback copy, so a setup code is the quickest way back.'),
+      actions: actions
+    });
+  }
+
+  /**
+   * Rebuild a setup code from what is in the app right now, so the whole
+   * setup can be kept somewhere outside this browser and pasted back.
+   */
+  function myCode() {
+    var parts = activeBills().map(function (b) {
+      var seg = b.name.replace(/[,;&+]/g, ' ').trim().replace(/\s+/g, '+') + ',' +
+        (Math.round(b.amount * 100) / 100);
+      if (isDated(b)) seg += ',' + b.dueDate;
+      if (b.recurrence === 'schedule' && (b.scheduleDates || []).length) {
+        seg += ',' + b.scheduleDates.join('/');
+      }
+      return seg;
+    });
+    var code = parts.length ? 'add=' + parts.join(';') : '';
+    var s = state.settings;
+    var tail = [];
+    if (s.countMode === 'estimate') tail.push('w=' + perWeek());
+    tail.push('c=' + s.cushionDays);
+    if (s.partner && s.partner.mode !== 'none') {
+      tail.push('p=' + s.partner.name.replace(/[:&]/g, '').replace(/\s+/g, '+') +
+        ':' + s.partner.mode + ':' + s.partner.value);
+    }
+    tail.push('tax=' + (s.taxRate || 0));
+    return (code ? code + '&' : '') + tail.join('&');
+  }
+
+  function myCodeSheet() {
+    var code = myCode();
+    var html = '<h2>Your setup code</h2>' +
+      '<div class="sheet-sub">Everything about your bills and splits, as text. Keep it in ' +
+      'Notes or message it to yourself — pasting it back rebuilds the lot.</div>' +
+      '<div class="field"><textarea id="my-code" rows="6" readonly ' +
+      'style="font-size:12px" onclick="this.select()">' + esc(code) + '</textarea></div>' +
+      '<div class="hint mb">It does not include your jobs, costs or day history — ' +
+      'use <strong>Save backup</strong> for those.</div>' +
+      '<button class="btn primary" id="my-copy" style="margin-bottom:8px">Copy it</button>' +
+      '<button class="btn ghost" data-act="close-sheet">Close</button>';
+    openSheet(html, function (sheet) {
+      $('#my-copy', sheet).addEventListener('click', function () {
+        var ta = $('#my-code', sheet);
+        ta.select(); ta.setSelectionRange(0, 99999);
+        var done = function () {
+          state.settings.lastBackup = todayISO(); save(); render();
+          toast('⧉ Copied — paste it somewhere safe');
+        };
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          navigator.clipboard.writeText(ta.value).then(done, function () {
+            try { document.execCommand('copy'); done(); } catch (e) { toast('Select the text and copy it'); }
+          });
+        } else {
+          try { document.execCommand('copy'); done(); } catch (e) { toast('Select the text and copy it'); }
+        }
+      });
+    });
+  }
+
   /* ---------------------------------------------------------------------------
      10. Toast
      ------------------------------------------------------------------------ */
 
   function toast(msg, actionLabel) {
+    // Never report success when the write did not stick.
+    if (!saveWorks && String(msg).indexOf('✅') === 0) {
+      msg = '⚠️ NOT saved — this browser is not storing anything';
+      actionLabel = null;
+    }
     var el = $('#toast');
     el.innerHTML = '<span>' + msg + '</span>';
     if (actionLabel && lastUndo) {
@@ -3216,6 +3407,7 @@
       case 'pay-partner': payoutSheet('partner'); break;
       case 'pay-tax': payoutSheet('tax'); break;
       case 'business-setup': businessSetupSheet(); break;
+      case 'my-code': myCodeSheet(); break;
       case 'chart-day': daySheet(t.dataset.date); break;
 
       case 'toggle-archived': showArchived = !showArchived; render(); break;
@@ -3271,8 +3463,11 @@
      ------------------------------------------------------------------------ */
 
   load();
-  save();            // write the migrated shape back, so a backup carries it
+  // Only rewrite storage when we genuinely understood what was there. Saving
+  // over a corrupt or unreadable store would throw away the only copy.
+  if (loadState === 'ok' || loadState === 'empty') save();
   render();
+  offerRecovery();
   checkImportLink();
 
   // A setup link tapped while the app is already open only changes the
