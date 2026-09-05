@@ -156,6 +156,7 @@
       settings: {
         partner: { name: 'Logan', mode: 'none', value: 0 },
         taxRate: 0,
+        autoSetAside: true,        // money earned funds the bills without being asked
         cushionDays: 6,
         cushionMode: 'workdays',   // count the cushion in workdays, not calendar days
         countMode: 'workdays',     // 'workdays' | 'alldays' | 'estimate'
@@ -275,7 +276,16 @@
     } catch (e) { return null; }
   }
 
+  var syncing = false;
+
   function save() {
+    // Rebuild the automatic set-aside from whatever just changed. Doing it
+    // here rather than at each call site means no edit can quietly skip it.
+    if (!syncing) {
+      syncing = true;
+      try { syncAllAuto(); } catch (e) { console.warn('auto set-aside', e); }
+      syncing = false;
+    }
     rev++;
     var payload = JSON.stringify(state);
     try {
@@ -597,16 +607,23 @@
     // Slack: at the rate this cycle was planned at, how many days could you
     // lose and still pay on time? Starts at the cushion, drops a day for every
     // day you don't set anything aside, and climbs back when you work extra.
+    // Running it down is not danger — the daily figure rises to cover it — so
+    // it is worded as a cushion being used up, never as a missed bill.
     var plannedRate = b.amount / Math.max(1, countFundingDays(b.cycleStart, target));
     var daysNeeded = plannedRate > 0 ? Math.ceil(remaining / plannedRate) : 0;
     var slack = remaining <= 0.004
       ? Math.max(0, daysToDue)
       : Math.floor(daysToDue - fundingToCalendar(daysNeeded));
 
+    // The badge answers the only question that matters — will this bill be
+    // paid on time? Being off a straight line with days of cushion still in
+    // hand is catching up, not trouble: the daily figure has already taken it
+    // on board. Badging all of those "Behind" only buries the ones that count.
     var key = 'ontrack', label = 'On track';
     if (remaining <= 0.004) { key = 'funded'; label = 'Fully funded'; }
     else if (urgent) { key = 'urgent'; label = daysToDue < 0 ? 'Overdue' : 'Due now'; }
-    else if (saved + 0.5 < expected) { key = 'behind'; label = 'Behind'; }
+    else if (saved + 0.5 < expected) { key = 'behind'; label = 'Catching up'; }
+    else if (slack <= 1) { key = 'behind'; label = 'Tight'; }
 
     return {
       slack: slack,
@@ -769,14 +786,33 @@
     return round2(Math.max(0, base) * taxRate());
   }
 
+  function autoPaidOn(iso) {
+    var tag = autoSrc(iso);
+    return round2(contributionsOn(iso).reduce(function (a, c) {
+      return a + (c.src === tag ? c.amount : 0);
+    }, 0));
+  }
+
+  /** Bill money put in by hand — which may have come from savings, not today. */
+  function manualPaidOn(iso) {
+    var tag = autoSrc(iso);
+    return round2(contributionsOn(iso).reduce(function (a, c) {
+      return a + (c.src === tag ? 0 : c.amount);
+    }, 0));
+  }
+
   /**
-   * Today's share of the bills — what is STILL owed today, after anything
-   * already banked toward them. Using the original plan here would charge
-   * the day twice for bill money that was already set aside separately.
+   * What today's takings still have to cover for bills.
+   *
+   * The day's target, less anything put in by hand — money set aside from
+   * savings does not have to be earned again. Money moved automatically is
+   * NOT deducted here: it came out of today's takings, which are already
+   * counted on the other side of the sum.
    */
   function billShareOn(iso) {
     var day = simulate(iso, iso)[iso];
-    return day ? day.remainingTotal : 0;
+    var target = day ? day.plannedTotal : 0;
+    return round2(Math.max(0, target - manualPaidOn(iso)));
   }
 
   /** The whole chain for one day. */
@@ -785,16 +821,28 @@
     var cost = costsOn(iso);
     var partner = partnerCutOn(iso);
     var tax = taxOn(iso);
-    var bills = billShareOn(iso);
+    var spare = round2(rev - cost - partner - tax);
+
+    var day = simulate(iso, iso)[iso];
+    var auto = autoPaidOn(iso);
+    var owed = billShareOn(iso);
+
+    // With money moving by itself, the chain shows what actually went across.
+    // Without it, it shows what still has to, which is the thing to act on.
+    var toBills = state.settings.autoSetAside ? auto : owed;
+
     return {
       date: iso, revenue: rev, costs: cost,
       grossProfit: round2(rev - cost),
-      partner: partner, tax: tax, bills: bills,
+      partner: partner, tax: tax,
+      bills: toBills,
+      billsAuto: auto,
+      billsTarget: day ? day.plannedTotal : 0,
+      billsShort: day ? day.remainingTotal : 0,
       jobs: jobsOn(iso).length,
       // what the work itself made you, before any bill money moves
-      earned: round2(rev - cost - partner - tax),
-      // what is left once today's outstanding bill share is also set aside
-      takeHome: round2(rev - cost - partner - tax - bills)
+      earned: spare,
+      takeHome: round2(spare - toBills)
     };
   }
 
@@ -829,6 +877,80 @@
       default:
         return round2(cost + needAfterPartner);
     }
+  }
+
+  /* ---------------------------------------------------------------------------
+     5c. Money earned funds the bills by itself
+     -----------------------------------------------------------------------------
+     What a day earns, after costs, the partner's cut and tax, goes straight
+     into the bill pot — up to what that day actually owes. Anything above
+     that is yours.
+
+     These entries are derived, never typed, so they are rebuilt from scratch
+     whenever the day's figures change. Anything set aside by hand is counted
+     first and never touched.
+     ------------------------------------------------------------------------ */
+
+  function autoSrc(iso) { return 'auto:' + iso; }
+
+  function dropAutoFor(iso) {
+    var tag = autoSrc(iso);
+    var before = state.contributions.length;
+    state.contributions = state.contributions.filter(function (c) { return c.src !== tag; });
+    rev++;                 // anything read after this must not see them
+    return before !== state.contributions.length;
+  }
+
+  /**
+   * Rebuild one day's automatic set-aside. Returns what it put in.
+   * Safe to call as often as you like — it always clears its own work first.
+   */
+  /**
+   * The earliest day still safe to re-derive. Once a bill is marked paid its
+   * cycle closes, and rebuilding an older day would fund the new cycle out of
+   * money that already went to the old one.
+   */
+  function autoSyncFloor() {
+    var floor = state.meta.created || todayISO();
+    activeBills().forEach(function (b) {
+      if (b.cycleStart && diffDays(floor, b.cycleStart) > 0) floor = b.cycleStart;
+    });
+    return floor;
+  }
+
+  function syncAutoSetAside(iso) {
+    if (diffDays(autoSyncFloor(), iso) < 0) return 0;   // settled cycle, leave it be
+    dropAutoFor(iso);
+    if (!state.settings.autoSetAside) return 0;
+
+    // With its own entries gone, this is the day as it genuinely stands.
+    var rev = revenueOn(iso);
+    if (rev <= 0.004) return 0;
+    var spare = round2(Math.max(0, rev - costsOn(iso) - partnerCutOn(iso) - taxOn(iso)));
+    if (spare <= 0.004) return 0;
+
+    var day = simulate(iso, iso)[iso];
+    var owed = day ? day.remainingTotal : 0;      // after anything set aside by hand
+    var give = round2(Math.min(spare, owed));
+    if (give <= 0.004) return 0;
+
+    var res = allocate(give, iso);
+    logContributions(iso, res.alloc, { src: autoSrc(iso), note: 'From the day\'s work' });
+    return give;
+  }
+
+  /** Every day that has any work on it — used when a rule changes under them. */
+  function activeDays() {
+    var seen = {};
+    state.jobs.forEach(function (j) { seen[j.date] = 1; });
+    state.expenses.forEach(function (e) { seen[e.date] = 1; });
+    return Object.keys(seen).sort();
+  }
+
+  function syncAllAuto() {
+    var total = 0;
+    activeDays().forEach(function (iso) { total += syncAutoSetAside(iso); });
+    return round2(total);
   }
 
   /** Running balances: what you still owe your partner, and what tax you're holding. */
@@ -955,11 +1077,13 @@
       state.contributions.push(c);
       added.push(c.id);
     });
+    rev++;                 // the contribution index is keyed on rev
     return added;
   }
 
   function removeContributions(ids) {
     state.contributions = state.contributions.filter(function (c) { return ids.indexOf(c.id) === -1; });
+    rev++;
   }
 
   function completeDay(iso, o) {
@@ -1180,7 +1304,10 @@
     } else if (m.takeHome >= 0) {
       eyebrow = 'You keep today';
       amount = money(m.takeHome);
+      // A hard day's work can still end at $0 kept. Say where it went rather
+      // than leaving a bare zero to be puzzled over.
       sub = money(m.revenue) + ' in across ' + plural(m.jobs, 'job');
+      if (m.bills > 0.004) sub += ' · ' + money(m.bills) + ' of it went to bills';
     } else {
       cls += ' is-urgent';
       eyebrow = '⚠️ Short today';
@@ -1218,14 +1345,22 @@
       if (m.costs > 0.004) html += flowRow('What it cost you', plural(expensesOn(t).length, 'expense'), -m.costs, 'out');
       if (m.partner > 0.004) html += flowRow(esc(partnerName()) + '’s cut', partnerRule(), -m.partner, 'out');
       if (m.tax > 0.004) html += flowRow('Tax put by', state.settings.taxRate + '%', -m.tax, 'out');
+      var auto = state.settings.autoSetAside;
       if (m.bills > 0.004) {
-        html += flowRow('Bills', plural(day.planned.length, 'bill') +
-          (actual > 0.004 ? ' · ' + money(actual) + ' in' : ''), -m.bills, 'out');
+        html += flowRow(auto ? 'Set aside for bills' : 'Bills',
+          auto ? 'moved for you' : plural(day.planned.length, 'bill'),
+          -m.bills, 'out');
       }
       html += '<div class="flow-row total ' + (m.takeHome < 0 ? 'neg' : 'pos') + '">' +
         '<div class="flow-label">You keep</div>' +
         '<div class="flow-amt">' + money(m.takeHome) + '</div></div>';
-      html += '</div></div>';
+      html += '</div>';
+      if (m.billsShort > 0.004 && m.revenue > 0.004) {
+        html += '<div class="hint mt">Bills still want <strong>' + money(m.billsShort) +
+          '</strong> today. Earn it and it goes across by itself — or it rolls into ' +
+          'tomorrow\'s number.</div>';
+      }
+      html += '</div>';
     }
 
     /* ---- today's jobs ---- */
@@ -1282,6 +1417,13 @@
         '<div class="small dim" id="bill-slack">' +
         (slackPhrase().replace(/^ · /, '') || plural(day.remaining.length, 'bill')) + '</div></div>';
 
+      var behind = round2(sortedStatuses().reduce(function (a, x) { return a + x.shortfall; }, 0));
+      if (behind > 0.5) {
+        html += '<div class="hint mb">Today\'s figure includes <strong>' + money(behind) +
+          '</strong> of catching up from days you missed — it spreads over the days you ' +
+          'have left, so staying on it clears the lot.</div>';
+      }
+
       // One line first. The full list is a tap away rather than nine rows
       // of scrolling before you reach anything else.
       var rowsOpen = billRowsVisible();
@@ -1313,10 +1455,23 @@
       html += '<div class="mt">';
       if (!done) {
         if (day.remainingTotal > 0.004) {
-          html += '<button class="btn primary" data-act="quick-complete">Set aside ' +
-            money(day.remainingTotal) + ' &amp; complete day</button>' +
-            '<div class="btn-row mt"><button class="btn" data-act="custom-amount">Different amount</button>' +
-            '<button class="btn" data-act="skip-day">Couldn\'t today</button></div>';
+          // Once the day's takings are accounted for, the rest could only come
+          // out of savings. Asking for it in the big green button is how you end
+          // up staring at a number you were never going to make today.
+          var spent = m.revenue > 0.004 && m.takeHome <= 0.004;
+          if (spent) {
+            html += '<button class="btn primary" data-act="complete-only">Mark today done</button>' +
+              '<div class="hint mt">Everything today made is already accounted for. The last ' +
+              money(day.remainingTotal) + ' would have to come out of savings — leave it and it ' +
+              'rolls into tomorrow\'s number instead.</div>' +
+              '<div class="btn-row mt"><button class="btn" data-act="custom-amount">Add from savings</button>' +
+              '<button class="btn" data-act="skip-day">Couldn\'t today</button></div>';
+          } else {
+            html += '<button class="btn primary" data-act="quick-complete">Set aside ' +
+              money(day.remainingTotal) + ' &amp; complete day</button>' +
+              '<div class="btn-row mt"><button class="btn" data-act="custom-amount">Different amount</button>' +
+              '<button class="btn" data-act="skip-day">Couldn\'t today</button></div>';
+          }
         } else {
           html += '<button class="btn primary" data-act="complete-only">Mark day complete</button>';
         }
@@ -1330,11 +1485,17 @@
     /* ---- headline numbers ---- */
     var wk = weekWindow();
     var w = rangeMoney(wk.start, wk.end);
+    // Read across, these tell the same story as the day above: what came in,
+    // what the bills took, what is left. A bare "Yours" here meant money before
+    // bills, which sat on screen contradicting the hero's take-home.
     html += '<div class="card tight"><div class="stat-grid">' +
       '<div class="stat"><div class="stat-val money">' + money0(w.revenue) + '</div><div class="stat-lbl">In this week</div></div>' +
-      '<div class="stat"><div class="stat-val money">' + money0(w.earned) + '</div><div class="stat-lbl">Yours</div></div>' +
-      '<div class="stat"><div class="stat-val">' + streak() + '🔥</div><div class="stat-lbl">Day streak</div></div>' +
-      '</div></div>';
+      '<div class="stat"><div class="stat-val money">' + money0(w.billsSetAside) + '</div><div class="stat-lbl">To bills</div></div>' +
+      '<div class="stat"><div class="stat-val money">' + money0(w.earned - w.billsSetAside) + '</div><div class="stat-lbl">Kept</div></div>' +
+      '</div>' +
+      '<div class="list-row" style="border-bottom:none;padding-bottom:0"><div class="lr-sub">' +
+      plural(w.worked, 'day') + ' worked this week</div>' +
+      '<div class="lr-sub" id="day-streak">' + streak() + '🔥 day streak</div></div></div>';
 
     host.innerHTML = html;
   }
@@ -1399,7 +1560,7 @@
   function slackPhrase() {
     var t = tightestSlack();
     if (!t) return '';
-    if (t.slack <= 0) return ' · <strong>no days to spare</strong>';
+    if (t.slack <= 0) return ' · <strong>cushion used up</strong>';
     return ' · ' + plural(t.slack, 'day') + ' to spare';
   }
 
@@ -1452,6 +1613,35 @@
     var totalSaved = list.reduce(function (s, x) { return s + x.saved; }, 0);
     var perDayAll = list.reduce(function (s, x) { return s + x.perDay; }, 0);
     var buf = bufferTotal();
+
+    // One plain line answering "am I okay?" before any of the detail below.
+    var atRisk = list.filter(function (x) { return x.key === 'urgent'; });
+    var tight = list.filter(function (x) { return x.remaining > 0.004 && x.slack <= 1; });
+    var owing = list.filter(function (x) { return x.remaining > 0.004; });
+    if (list.length) {
+      var tone, icon, text;
+      if (atRisk.length) {
+        tone = 'warn'; icon = '⚠️';
+        text = '<strong>' + plural(atRisk.length, 'bill') + ' need' + (atRisk.length === 1 ? 's' : '') +
+          ' attention</strong>' +
+          atRisk.map(function (x) { return esc(x.bill.name); }).join(', ') +
+          ' — at this rate ' + (atRisk.length === 1 ? 'it will not' : 'they will not') +
+          ' be ready in time. Put extra in whenever you can.';
+      } else if (!owing.length) {
+        tone = 'good'; icon = '🎉';
+        text = '<strong>Every bill is fully funded</strong>' +
+          'Nothing more to set aside. Anything you earn now is yours.';
+      } else {
+        var next = owing.slice().sort(function (a, b) { return diffDays(b.target, a.target); })[0];
+        tone = 'good'; icon = '✅';
+        text = '<strong>All ' + plural(list.length, 'bill') + ' are on course</strong>' +
+          'Keep to ' + money(perDayAll) + ' a ' + unitWord() + ' and every one is ready before it is due. ' +
+          'Next up ' + esc(next.bill.name) + ', fully funded by ' + fmtDate(next.target) + '.' +
+          (tight.length ? ' ' + plural(tight.length, 'bill') + ' ' +
+            (tight.length === 1 ? 'has' : 'have') + ' no cushion left, so try not to miss a day.' : '');
+      }
+      html += '<div class="banner ' + tone + '"><span>' + icon + '</span><div>' + text + '</div></div>';
+    }
 
     html += '<div class="card tight"><div class="stat-grid">' +
       '<div class="stat"><div class="stat-val money">' + money0(totalSaved) + '</div><div class="stat-lbl">Saved</div></div>' +
@@ -1524,7 +1714,7 @@
       '<span>Fully funded by <strong>' + fmtDate(s.target, 'dow') + '</strong></span>' +
       '<span class="faint">· due ' + fmtDate(b.dueDate) + ' (' + relDay(b.dueDate) + ')</span>' +
       (s.remaining > 0.004 && s.slack <= 1
-        ? '<span>· <strong>' + (s.slack <= 0 ? 'no days to spare' : '1 day to spare') + '</strong></span>'
+        ? '<span>· <strong>' + (s.slack <= 0 ? 'cushion used up' : '1 day to spare') + '</strong></span>'
         : '') +
       (s.key === 'behind' ? '<span>· <strong>' + money(s.shortfall) + ' behind pace</strong></span>' : '') +
       '</div></button>';
@@ -1775,7 +1965,10 @@
     var firstISO = toISO(first);
     var lastISO = toISO(new Date(calMonth.y, calMonth.m, lastDay));
 
-    var simStart = diffDays(t, firstISO) > 0 ? firstISO : t;   // never simulate before today
+    // Always project from today, even when looking at a later month. Starting
+    // at that month's 1st would forget everything banked between now and then
+    // and re-charge bills that will already be paid for.
+    var simStart = t;
     var sim = simulate(simStart, diffDays(simStart, lastISO) >= 0 ? lastISO : simStart);
 
     var html = '';
@@ -1879,6 +2072,15 @@
     var html = '';
 
     var pp = s.partner || {};
+    html += '<div class="card"><div class="card-title">Bill money</div>' +
+      '<div class="switch-row"><div><div class="sr-label">Set money aside automatically</div>' +
+      '<div class="sr-hint">What a job earns — after costs' +
+      ((s.partner || {}).mode !== 'none' ? ', ' + esc((s.partner || {}).name || 'the cut') : '') +
+      (s.taxRate ? ' and tax' : '') +
+      ' — goes straight to that day\'s bills. Anything over is yours.</div></div>' +
+      '<button class="switch' + (s.autoSetAside ? ' on' : '') + '" data-act="toggle-auto"></button>' +
+      '</div></div>';
+
     html += '<div class="card"><div class="card-title">Splits &amp; tax</div>' +
       '<div class="list-row"><div><div>' +
       (pp.mode === 'none' ? 'Nobody takes a cut' : esc(pp.name || 'Partner') + '\'s cut') + '</div>' +
@@ -2546,19 +2748,24 @@
         } else {
           state.jobs.push(rec);
         }
+        if (job && job.date !== date) syncAutoSetAside(job.date);
+        var moved = syncAutoSetAside(date);
         save(); closeSheet(); render();
         var m = dayMoney(date);
-        toast('✅ ' + money(amt) + ' logged · ' +
-          (m.takeHome >= 0 ? money(m.takeHome) + ' kept' : money(-m.takeHome) + ' short') +
-          ' on ' + fmtDate(date));
+        toast('✅ ' + money(amt) + ' logged' +
+          (moved > 0.004 ? ' · ' + money(moved) + ' straight to bills' : '') +
+          ' · ' + money(Math.max(0, m.takeHome)) + ' yours');
       });
 
       if (!isNew) {
         $('#j-del', sheet).addEventListener('click', function () {
           var gone = job;
           state.jobs = state.jobs.filter(function (x) { return x.id !== job.id; });
+          syncAutoSetAside(job.date);
           save(); closeSheet(); render();
-          lastUndo = { fn: function () { state.jobs.push(gone); save(); render(); } };
+          lastUndo = { fn: function () {
+            state.jobs.push(gone); syncAutoSetAside(gone.date); save(); render();
+          } };
           toast('🗑️ Job removed', 'Undo');
         });
       }
@@ -2636,6 +2843,8 @@
         } else {
           state.expenses.push(rec);
         }
+        if (exp && exp.date !== date) syncAutoSetAside(exp.date);
+        syncAutoSetAside(date);
         save(); closeSheet(); render();
         var catLbl = (EXPENSE_CATS.filter(function (c) { return c.v === cat; })[0] || {}).label || 'Expense';
         toast('✅ ' + money(amt) + ' · ' + (item || catLbl) + ' logged');
@@ -2645,8 +2854,11 @@
         $('#e-del', sheet).addEventListener('click', function () {
           var gone = exp;
           state.expenses = state.expenses.filter(function (x) { return x.id !== exp.id; });
+          syncAutoSetAside(exp.date);
           save(); closeSheet(); render();
-          lastUndo = { fn: function () { state.expenses.push(gone); save(); render(); } };
+          lastUndo = { fn: function () {
+            state.expenses.push(gone); syncAutoSetAside(gone.date); save(); render();
+          } };
           toast('🗑️ Expense removed', 'Undo');
         });
       }
@@ -3348,11 +3560,19 @@
 
     html += '<div class="card tight"><div class="card-title">The bills</div>' +
       '<p class="small">Each bill is chopped into daily pieces so it is fully paid for ' +
-      '<strong>' + cushionWords() + ' before it is due</strong>. Put that piece aside each ' +
-      'day and the bill is never a surprise. Miss a day and tomorrow\'s piece grows a ' +
-      'little — you cannot quietly fall behind.</p>' +
-      '<p class="small dim mt">"Days to spare" is how many days you could skip and still ' +
-      'pay on time.</p></div>';
+      '<strong>' + cushionWords() + ' before it is due</strong>. Miss a day and tomorrow\'s ' +
+      'piece grows a little — you cannot quietly fall behind.</p>' +
+      (state.settings.autoSetAside
+        ? '<p class="small mt">You do not have to move that money yourself. What a day ' +
+          'earns, after costs' + (hasCut ? ' and ' + esc(partnerName()) + '\'s cut' : '') +
+          ', <strong>goes to the bills on its own</strong> — nearest due date first, ' +
+          'until the day\'s share is covered. Anything past that is yours.</p>'
+        : '<p class="small mt">Moving the money is down to you at the moment. Turn on ' +
+          '<strong>More → Fund bills automatically</strong> and the app does it out of ' +
+          'each day\'s takings instead.</p>') +
+      '<p class="small dim mt">"Days to spare" is your cushion: how many days you could ' +
+      'skip and still pay on time. Use it all up and the bills still get paid — the ' +
+      'daily figure just climbs to catch up.</p></div>';
 
     if (hasCut || hasTax) {
       html += '<div class="card tight"><div class="card-title">Money that is not yours</div>' +
@@ -3604,11 +3824,12 @@
         if (!tj) break;
         var wasOwed = jobHasCut(tj);
         tj.partnerCut = !wasOwed;
+        syncAutoSetAside(tj.date);
         save(); render();
         // the sheet, if one is open, is showing a stale row
         if ($('.sheet')) daySheet(tj.date);
         lastUndo = {
-          fn: function () { tj.partnerCut = wasOwed; save(); render(); }
+          fn: function () { tj.partnerCut = wasOwed; syncAutoSetAside(tj.date); save(); render(); }
         };
         toast(tj.partnerCut
           ? '💰 ' + esc(partnerName()) + ' owed ' + money(partnerCutOn(tj.date)) + ' for ' + fmtDate(tj.date)
@@ -3618,6 +3839,16 @@
 
       case 'pay-partner': payoutSheet('partner'); break;
       case 'pay-tax': payoutSheet('tax'); break;
+      case 'toggle-auto': {
+        state.settings.autoSetAside = !state.settings.autoSetAside;
+        var moved = state.settings.autoSetAside ? syncAllAuto() : 0;
+        save(); render();
+        toast(state.settings.autoSetAside
+          ? '⚙️ Earnings now fund your bills' + (moved > 0.004 ? ' · ' + money(moved) + ' moved across' : '')
+          : '⚙️ Bill money is yours to move by hand');
+        break;
+      }
+
       case 'business-setup': businessSetupSheet(); break;
       case 'my-code': myCodeSheet(); break;
       case 'chart-day': daySheet(t.dataset.date); break;

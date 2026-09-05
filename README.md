@@ -27,6 +27,12 @@ money in                       what jobs brought in
 = what you keep
 ```
 
+You do not move that money yourself. What a day earns, after costs, the cut and tax,
+**goes across to the bills on its own** — nearest due date first, until the day's share
+is covered. Anything beyond that stays yours. Edit a job, delete one, change whose job
+it was, and the transfer is worked out again from scratch. It can be turned off under
+**More → Fund bills automatically**, which hands the job back to you.
+
 Run backwards, that same chain gives **break-even**: what the day has to bring in
 before you are working for nothing. It's on the Today screen while the day is still
 short, and as a dashed line across the 14-day chart.
@@ -75,6 +81,15 @@ Every bill card holds to one invariant, so the numbers can be trusted at a glanc
 daily rate × funding days left = money still needed
 ```
 
+Across the whole run the same thing holds: add up every daily figure the plan asks for
+between today and the last funding date and you get exactly the sum of the bills — no
+more, no less. Miss a day and nothing is lost; the money reappears spread across the
+days that are left, and the app says so in as many words.
+
+A bill that has fallen off its original pace reads **Catching up**, not a warning: the
+daily figure has already absorbed it and the bill is still funded before it is due. Only
+a bill past its funding date is flagged as urgent.
+
 ### What's in it
 
 - **Today** — what you keep, the chain that gets there, the jobs and costs behind it,
@@ -93,8 +108,11 @@ daily rate × funding days left = money still needed
   A bill can be added before you know its due date — it sits flagged as "needs a date"
   and stays out of the daily figure until you set one, rather than quietly skewing it.
 - **Plan** — a month calendar with the required amount on every future day, dropping
-  as bills finish. Completed days, missed days and days off are all marked.
-- **More** — your workday pattern, cushion length, rounding, and backup/restore.
+  as bills finish. Completed days, missed days and days off are all marked. Paging
+  forward keeps projecting from today, so a later month accounts for everything banked
+  between now and then instead of re-charging bills that will already be paid.
+- **More** — automatic bill funding on or off, your workday pattern, cushion length,
+  rounding, and backup/restore.
 
 ### Details worth knowing
 
