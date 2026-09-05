@@ -22,6 +22,7 @@
 
   var STORE_KEY = 'billcushion.v1';
   var BACKUP_KEY = 'billcushion.lastgood';   // the state as of the last clean open
+  var APP_VERSION = '2026.09.05';            // bump when shipping; shown under More
   var MS_DAY = 86400000;
   var DOW_LONG = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
   var DOW_MID = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
@@ -1232,18 +1233,7 @@
     if (jl.length) {
       html += '<div class="card"><div class="card-title">Jobs today' +
         '<span class="faint" style="text-transform:none;letter-spacing:0">' + money(m.revenue) + '</span></div>';
-      jl.forEach(function (j) {
-        var meth = METHODS.filter(function (x) { return x.v === j.method; })[0];
-        html += '<button class="log-row" data-act="edit-job" data-id="' + j.id + '">' +
-          '<div class="log-ico">' + (meth ? meth.icon : '💵') + '</div>' +
-          '<div class="log-main"><div class="log-title">' + esc(j.service || 'Job') + '</div>' +
-          '<div class="log-sub">' + (j.client ? esc(j.client) + ' · ' : '') +
-          (meth ? meth.label : '') +
-          ((state.settings.partner || {}).mode !== 'none' && !jobHasCut(j)
-            ? ' · <strong>all yours</strong>' : '') +
-          (j.note ? ' · ' + esc(j.note) : '') + '</div></div>' +
-          '<div class="log-amt in">+' + money(j.amount) + '</div></button>';
-      });
+      jl.forEach(function (j) { html += jobRowHTML(j); });
       html += '</div>';
     }
 
@@ -1261,6 +1251,23 @@
           '<div class="log-amt out">−' + money(e.amount) + '</div></button>';
       });
       html += '</div>';
+    }
+
+    /* ---- yesterday is one tap away, not buried on another tab ---- */
+    var yest = addDays(t, -1);
+    var yj = jobsOn(yest), ye = expensesOn(yest);
+    if (yj.length || ye.length) {
+      var ym = dayMoney(yest);
+      html += '<button class="log-row" style="width:100%;background:var(--bg-elev);' +
+        'border:1px solid var(--line);border-radius:var(--radius);padding:14px;margin-bottom:14px" ' +
+        'data-act="open-day" data-date="' + yest + '">' +
+        '<div class="log-ico">↩︎</div>' +
+        '<div class="log-main"><div class="log-title">Yesterday <span class="go">›</span></div>' +
+        '<div class="log-sub">' + money(ym.revenue) + ' in · ' + plural(yj.length, 'job') +
+        (ye.length ? ' · ' + plural(ye.length, 'cost') : '') +
+        ' — tap to change anything</div></div>' +
+        '<div class="log-amt ' + (ym.earned >= 0 ? 'in' : 'out') + '">' + money(ym.earned) + '</div>' +
+        '</button>';
     }
 
     /* ---- the bill set-aside, still the thing that has to happen ---- */
@@ -1330,6 +1337,36 @@
       '</div></div>';
 
     host.innerHTML = html;
+  }
+
+  /**
+   * A logged job. The cut is switchable straight from the row — whose job it
+   * was is the thing most likely to need changing after the fact, and it
+   * should not require opening anything.
+   */
+  function jobRowHTML(j) {
+    var meth = METHODS.filter(function (x) { return x.v === j.method; })[0];
+    var p = state.settings.partner || {};
+    var owes = jobHasCut(j);
+    var cutLabel = p.mode === 'perJob' ? esc(partnerName()) + ' ' + money0(p.value)
+      : p.mode === 'pctRevenue' || p.mode === 'pctProfit' ? esc(partnerName()) + ' ' + p.value + '%'
+      : esc(partnerName());
+
+    return '<div class="log-row">' +
+      '<div class="log-ico">' + (meth ? meth.icon : '💵') + '</div>' +
+      '<button class="log-main" data-act="edit-job" data-id="' + j.id + '">' +
+      '<div class="log-title">' + esc(j.service || 'Job') + ' <span class="go">›</span></div>' +
+      '<div class="log-sub">' + (j.client ? esc(j.client) + ' · ' : '') +
+      (meth ? meth.label : '') + (j.note ? ' · ' + esc(j.note) : '') + '</div></button>' +
+      '<div class="jrow-right">' +
+      '<div class="log-amt in">+' + money(j.amount) + '</div>' +
+      (p.mode !== 'none'
+        ? '<button class="cut-chip ' + (owes ? 'owes' : 'mine') + '" ' +
+          'data-act="toggle-job-cut" data-id="' + j.id + '" ' +
+          'aria-label="' + (owes ? 'Owes ' + esc(partnerName()) : 'All yours') + ', tap to change">' +
+          (owes ? cutLabel : 'All yours') + '</button>'
+        : '') +
+      '</div></div>';
   }
 
   function flowRow(label, sub, amount, cls) {
@@ -1939,7 +1976,10 @@
         '</div></div><div class="lr-amt tiny faint">kept</div></div>' : '') +
       '<div class="hint mt">Your data lives in this browser only. It is not on the internet, ' +
       'so clearing Safari data erases it — and the app on your Home Screen keeps its own ' +
-      'separate copy from Safari.</div></div>';
+      'separate copy from Safari.</div>' +
+      '<div class="list-row" style="border-top:1px solid var(--line);margin-top:6px">' +
+      '<div><div>App version</div><div class="lr-sub">Pull down to refresh if this looks old</div></div>' +
+      '<div class="lr-amt tiny faint">' + APP_VERSION + '</div></div></div>';
 
     html += '<div class="card"><div class="card-title">Your setup code</div>' +
       '<p class="small dim mb">The quickest way back if anything is ever lost: copy this and ' +
@@ -2832,13 +2872,7 @@
         '<div class="flow-label">Kept</div><div class="flow-amt">' + money(dm.takeHome) + '</div></div>' +
         '</div></div>';
 
-      jobsOn(iso).forEach(function (j) {
-        html += '<button class="log-row" data-act="edit-job" data-id="' + j.id + '">' +
-          '<div class="log-ico">💵</div><div class="log-main">' +
-          '<div class="log-title">' + esc(j.service || 'Job') + '</div>' +
-          '<div class="log-sub">' + (j.client ? esc(j.client) : 'no name') + '</div></div>' +
-          '<div class="log-amt in">+' + money(j.amount) + '</div></button>';
-      });
+      jobsOn(iso).forEach(function (j) { html += jobRowHTML(j); });
       expensesOn(iso).forEach(function (e) {
         var cat = EXPENSE_CATS.filter(function (c) { return c.v === e.category; })[0];
         html += '<button class="log-row" data-act="edit-expense" data-id="' + e.id + '">' +
@@ -3564,6 +3598,24 @@
         if (ex) expenseSheet(ex);
         break;
       }
+      case 'toggle-job-cut': {
+        var tj = null;
+        state.jobs.forEach(function (x) { if (x.id === id) tj = x; });
+        if (!tj) break;
+        var wasOwed = jobHasCut(tj);
+        tj.partnerCut = !wasOwed;
+        save(); render();
+        // the sheet, if one is open, is showing a stale row
+        if ($('.sheet')) daySheet(tj.date);
+        lastUndo = {
+          fn: function () { tj.partnerCut = wasOwed; save(); render(); }
+        };
+        toast(tj.partnerCut
+          ? '💰 ' + esc(partnerName()) + ' owed ' + money(partnerCutOn(tj.date)) + ' for ' + fmtDate(tj.date)
+          : '✅ That one is all yours', 'Undo');
+        break;
+      }
+
       case 'pay-partner': payoutSheet('partner'); break;
       case 'pay-tax': payoutSheet('tax'); break;
       case 'business-setup': businessSetupSheet(); break;
