@@ -22,7 +22,7 @@
 
   var STORE_KEY = 'billcushion.v1';
   var BACKUP_KEY = 'billcushion.lastgood';   // the state as of the last clean open
-  var APP_VERSION = '2026.09.06';            // bump when shipping; shown under More
+  var APP_VERSION = '2026.09.07';            // bump when shipping; shown under More
   var MS_DAY = 86400000;
   var DOW_LONG = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
   var DOW_MID = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
@@ -156,7 +156,7 @@
       settings: {
         partner: { name: 'Logan', mode: 'none', value: 0 },
         taxRate: 0,
-        autoSetAside: true,        // money earned funds the bills without being asked
+        autoSetAside: false,       // opt-in: move the day's share without being asked
         showChain: false,          // the full where-it-went breakdown, folded until wanted
         cushionDays: 6,
         cushionMode: 'workdays',   // count the cushion in workdays, not calendar days
@@ -164,6 +164,7 @@
         workdays: [1, 2, 3, 4, 5], // 0 = Sunday
         daysPerWeek: 5,            // 'estimate' mode: how many days a week you usually work
         roundTo: 0.01,             // round the daily ask up to this step
+        confirmMigrated: false,    // one-time move off the old automatic behaviour
         installDismissed: false,
         lastBackup: null
       },
@@ -254,6 +255,22 @@
       // expenses used to carry only a note; the note was always the item
       state.expenses.forEach(function (e) { if (!e.item) e.item = e.note || ''; });
       if (!state.settings.workdays.length) state.settings.workdays = [1, 2, 3, 4, 5];
+
+      // Money used to be moved across on its own. It is a suggestion you
+      // confirm now, so switch anyone who was on the automatic version over —
+      // but keep every dollar already set aside, booked as if entered by hand.
+      if (!state.settings.confirmMigrated) {
+        if (state.settings.autoSetAside) {
+          state.settings.autoSetAside = false;
+          state.contributions.forEach(function (c) {
+            if (typeof c.src === 'string' && c.src.indexOf('auto:') === 0) {
+              c.src = 'day:' + c.date;
+              if (!c.note) c.note = 'From that day\'s work';
+            }
+          });
+        }
+        state.settings.confirmMigrated = true;
+      }
       loadState = 'ok';
 
       // Keep the last clean open as a fallback, so a bad write later today
@@ -516,7 +533,12 @@
       // Today and beyond: assume the plan gets followed, so later days stay
       // realistic. Skipping today here would leave its share unbanked and
       // re-charge it across every following day.
-      if (!isPast(iso)) {
+      //
+      // Unless the day has been closed out. Once you have said you are done
+      // with it, whatever is left really is not coming, so it rolls forward
+      // into the days that are left — which is the whole point of the plan.
+      var closed = state.days[iso] && state.days[iso].completed;
+      if (!isPast(iso) && !closed) {
         for (var k = 0; k < remItems.length; k++) {
           for (var j = 0; j < rows.length; j++) {
             if (rows[j].b.id === remItems[k].billId) rows[j].saved = round2(rows[j].saved + remItems[k].amount);
@@ -559,6 +581,22 @@
       return diffDays(b.target, a.target) || b.amount - a.amount;
     });
     return { items: items, total: round2(total) };
+  }
+
+  /**
+   * What the next funding day would ask for if today stopped right here.
+   * Simulating from tomorrow counts only money actually banked by then, so
+   * this is the honest consequence of putting in less than suggested.
+   */
+  function nextDayAskIfStopped() {
+    var t = todayISO();
+    for (var i = 1; i <= 14; i++) {
+      var d = addDays(t, i);
+      if (!isFundingDay(d)) continue;
+      var sim = simulate(d, d)[d];
+      return { date: d, amount: sim ? sim.plannedTotal : 0 };
+    }
+    return null;
   }
 
   /** Today's snapshot, used all over the UI. */
@@ -787,6 +825,17 @@
     return round2(Math.max(0, base) * taxRate());
   }
 
+  /**
+   * Bill money that came out of that day's own takings — either confirmed on
+   * the day, or moved automatically for anyone who opted into that.
+   */
+  function fromWorkOn(iso) {
+    var auto = autoSrc(iso), byDay = 'day:' + iso;
+    return round2(contributionsOn(iso).reduce(function (a, c) {
+      return a + (c.src === auto || c.src === byDay ? c.amount : 0);
+    }, 0));
+  }
+
   function autoPaidOn(iso) {
     var tag = autoSrc(iso);
     return round2(contributionsOn(iso).reduce(function (a, c) {
@@ -794,12 +843,9 @@
     }, 0));
   }
 
-  /** Bill money put in by hand — which may have come from savings, not today. */
-  function manualPaidOn(iso) {
-    var tag = autoSrc(iso);
-    return round2(contributionsOn(iso).reduce(function (a, c) {
-      return a + (c.src === tag ? 0 : c.amount);
-    }, 0));
+  /** Bill money that came from savings rather than from the day's work. */
+  function fromSavingsOn(iso) {
+    return round2(dayActual(iso) - fromWorkOn(iso));
   }
 
   /**
@@ -813,7 +859,7 @@
   function billShareOn(iso) {
     var day = simulate(iso, iso)[iso];
     var target = day ? day.plannedTotal : 0;
-    return round2(Math.max(0, target - manualPaidOn(iso)));
+    return round2(Math.max(0, target - fromSavingsOn(iso)));
   }
 
   /** The whole chain for one day. */
@@ -828,9 +874,10 @@
     var auto = autoPaidOn(iso);
     var owed = billShareOn(iso);
 
-    // With money moving by itself, the chain shows what actually went across.
-    // Without it, it shows what still has to, which is the thing to act on.
-    var toBills = state.settings.autoSetAside ? auto : owed;
+    // Only money that has actually gone across comes off what you keep. The
+    // day's share is a recommendation until it is confirmed — deducting it
+    // before that shows a smaller number than the cash in your pocket.
+    var toBills = fromWorkOn(iso);
 
     return {
       date: iso, revenue: rev, costs: cost,
@@ -840,6 +887,8 @@
       billsAuto: auto,
       billsTarget: day ? day.plannedTotal : 0,
       billsShort: day ? day.remainingTotal : 0,
+      // what today's takings are still asked to cover
+      billsAsk: owed,
       jobs: jobsOn(iso).length,
       // what the work itself made you, before any bill money moves
       earned: spare,
@@ -1386,10 +1435,11 @@
         if (m.costs > 0.004) html += flowRow('What it cost you', plural(expensesOn(t).length, 'expense'), -m.costs, 'out');
         if (m.partner > 0.004) html += flowRow(esc(partnerName()) + '’s cut', partnerRule(), -m.partner, 'out');
         if (m.tax > 0.004) html += flowRow('Tax put by', state.settings.taxRate + '%', -m.tax, 'out');
-        var auto = state.settings.autoSetAside;
+        // The row is always the same thing — money out of today's takings that
+        // went to bills. Only how it got there differs.
         if (m.bills > 0.004) {
-          html += flowRow(auto ? 'Set aside for bills' : 'Bills',
-            auto ? 'moved for you' : plural(day.planned.length, 'bill'),
+          html += flowRow('Set aside for bills',
+            state.settings.autoSetAside ? 'moved for you' : 'you set this aside',
             -m.bills, 'out');
         }
         html += '<div class="flow-row total ' + (m.takeHome < 0 ? 'neg' : 'pos') + '">' +
@@ -1451,9 +1501,10 @@
 
     /* ---- the bill set-aside, still the thing that has to happen ---- */
     if (bills.length && datedBills().length) {
+      var putInToday = dayActual(t);
       html += '<div class="card"><div class="card-title">Bill money' +
         '<span class="faint" style="text-transform:none;letter-spacing:0" id="bill-state">' +
-        (done ? 'day complete ✓' : (day.remainingTotal > 0.004 ? 'to set aside' : 'all covered ✓')) +
+        (done ? 'day complete ✓' : (day.remainingTotal > 0.004 ? 'recommended today' : 'all covered ✓')) +
         '</span></div>' +
         '<div style="display:flex;align-items:baseline;justify-content:space-between;gap:10px;margin-bottom:10px">' +
         '<div class="money" id="bill-ask" style="font-size:1.6rem;font-weight:800;letter-spacing:-0.6px">' +
@@ -1461,10 +1512,25 @@
         '<div class="small dim" id="bill-slack">' +
         (slackPhrase().replace(/^ · /, '') || plural(day.remaining.length, 'bill')) + '</div></div>';
 
+      // Two lines at most: what this number is made of, and what happens if
+      // you put in less than it. Any more and the card becomes an essay.
       var behind = round2(sortedStatuses().reduce(function (a, x) { return a + x.shortfall; }, 0));
-      if (behind > 0.5) {
-        html += '<div class="hint mb">Includes <strong>' + money(behind) +
-          '</strong> of catching up. Stay on the number and it clears.</div>';
+      var made = [];
+      if (putInToday > 0.004) made.push(money(putInToday) + ' already in today');
+      if (behind > 0.5) made.push('includes ' + money(behind) + ' of catching up');
+      if (made.length) {
+        html += '<div class="hint mb">' + made.join(' · ') +
+          (day.remainingTotal <= 0.004 ? ' · today is covered' : '') + '</div>';
+      }
+
+      if (!done && day.remainingTotal > 0.004) {
+        var nxt = nextDayAskIfStopped();
+        var lead = m.revenue > 0.004 && m.takeHome + 0.004 < day.remainingTotal
+          ? 'You have ' + money(Math.max(0, m.takeHome)) + ' in hand — put in what you can. '
+          : 'Nothing moves until you tap. Put in less and nothing is lost. ';
+        html += '<div class="hint mb">' + lead + 'The rest moves to ' +
+          (nxt ? fmtDate(nxt.date) + ', which would then ask for <strong>' +
+            money(nxt.amount) + '</strong>.' : 'the days you have left.') + '</div>';
       }
 
       // One line first. The full list is a tap away rather than nine rows
@@ -1501,19 +1567,10 @@
           // Once the day's takings are accounted for, the rest could only come
           // out of savings. Asking for it in the big green button is how you end
           // up staring at a number you were never going to make today.
-          var spent = m.revenue > 0.004 && m.takeHome <= 0.004;
-          if (spent) {
-            html += '<button class="btn primary" data-act="complete-only">Mark today done</button>' +
-              '<div class="hint mt">The last ' + money(day.remainingTotal) + ' would come out ' +
-              'of savings. Leave it and it rolls into tomorrow.</div>' +
-              '<div class="btn-row mt"><button class="btn" data-act="custom-amount">Add from savings</button>' +
-              '<button class="btn" data-act="skip-day">Couldn\'t today</button></div>';
-          } else {
-            html += '<button class="btn primary" data-act="quick-complete">Set aside ' +
-              money(day.remainingTotal) + ' &amp; complete day</button>' +
-              '<div class="btn-row mt"><button class="btn" data-act="custom-amount">Different amount</button>' +
-              '<button class="btn" data-act="skip-day">Couldn\'t today</button></div>';
-          }
+          html += '<button class="btn primary" data-act="quick-complete">Set aside ' +
+            money(day.remainingTotal) + '</button>' +
+            '<div class="btn-row mt"><button class="btn" data-act="custom-amount">A different amount</button>' +
+            '<button class="btn" data-act="skip-day">Not today</button></div>';
         } else {
           html += '<button class="btn primary" data-act="complete-only">Mark day complete</button>';
         }
@@ -2045,8 +2102,20 @@
       if (past) {
         amt = dayActual(iso);
         monthActual += amt;
-        if (rec && rec.completed) { cls += ' done'; mark = rec.skipped ? '⏭' : '✓'; }
-        else if (funding && diffDays(state.meta.created, iso) >= 0) { cls += ' missed'; mark = '·'; }
+        // Judge a past day by the money that actually went across, not by
+        // whether a button was ever tapped. Setting money aside and never
+        // pressing "complete day" is not a missed day.
+        var tracked = funding && diffDays(state.meta.created, iso) >= 0;
+        var askedThen = 0;
+        if (tracked) {
+          var pastPlan = simulate(iso, iso)[iso];
+          askedThen = pastPlan ? pastPlan.plannedTotal : 0;
+        }
+        if (rec && rec.skipped) { cls += ' done'; mark = '⏭'; }
+        else if (amt > 0.004 && (askedThen <= 0.004 || amt + 0.004 >= askedThen)) { cls += ' done'; mark = '✓'; }
+        else if (amt > 0.004) { cls += ' part'; mark = '◐'; }
+        else if (rec && rec.completed) { cls += ' done'; mark = '✓'; }
+        else if (tracked) { cls += ' missed'; mark = '·'; }
         cls += ' past';
       } else {
         amt = cell ? cell.remainingTotal : 0;
@@ -2064,8 +2133,9 @@
     html += '</div>';
 
     html += '<div class="legend">' +
-      '<span><i style="background:rgba(34,197,94,.5)"></i>completed</span>' +
-      '<span><i style="background:rgba(239,68,68,.4)"></i>missed</span>' +
+      '<span><i style="background:rgba(34,197,94,.5)"></i>covered</span>' +
+      '<span><i style="background:rgba(245,158,11,.45)"></i>part paid</span>' +
+      '<span><i style="background:rgba(239,68,68,.4)"></i>nothing set aside</span>' +
       '<span><i style="background:var(--bg-elev-2);opacity:.45"></i>day off</span>' +
       '<span><i style="background:var(--blue)"></i>today</span>' +
       '</div>';
@@ -2115,11 +2185,13 @@
 
     var pp = s.partner || {};
     html += '<div class="card"><div class="card-title">Bill money</div>' +
-      '<div class="switch-row"><div><div class="sr-label">Set money aside automatically</div>' +
-      '<div class="sr-hint">What a job earns — after costs' +
+      '<div class="switch-row"><div><div class="sr-label">Move it without asking</div>' +
+      '<div class="sr-hint">Off by default: the app suggests an amount each day and you ' +
+      'confirm it, so nothing moves behind your back. Switch this on and what a job ' +
+      'earns — after costs' +
       ((s.partner || {}).mode !== 'none' ? ', ' + esc((s.partner || {}).name || 'the cut') : '') +
       (s.taxRate ? ' and tax' : '') +
-      ' — goes straight to that day\'s bills. Anything over is yours.</div></div>' +
+      ' — goes to that day\'s bills on its own.</div></div>' +
       '<button class="switch' + (s.autoSetAside ? ' on' : '') + '" data-act="toggle-auto"></button>' +
       '</div></div>';
 
@@ -3636,13 +3708,14 @@
       '<strong>' + cushionWords() + ' before it is due</strong>. Miss a day and tomorrow\'s ' +
       'piece grows a little — you cannot quietly fall behind.</p>' +
       (state.settings.autoSetAside
-        ? '<p class="small mt">You do not have to move that money yourself. What a day ' +
+        ? '<p class="small mt">You have asked the app to move that money itself. What a day ' +
           'earns, after costs' + (hasCut ? ' and ' + esc(partnerName()) + '\'s cut' : '') +
           ', <strong>goes to the bills on its own</strong> — nearest due date first, ' +
           'until the day\'s share is covered. Anything past that is yours.</p>'
-        : '<p class="small mt">Moving the money is down to you at the moment. Turn on ' +
-          '<strong>More → Fund bills automatically</strong> and the app does it out of ' +
-          'each day\'s takings instead.</p>') +
+        : '<p class="small mt">The daily figure is a <strong>suggestion, not a deduction</strong>. ' +
+          'Nothing moves until you tap <strong>Set aside</strong> — and you can put in more or ' +
+          'less than it asks. Put in less and tomorrow\'s figure goes up to cover it; put in ' +
+          'more and it goes down. It always adds up to the same bills.</p>') +
       '<p class="small dim mt">"Days to spare" is your cushion: how many days you could ' +
       'skip and still pay on time. Use it all up and the bills still get paid — the ' +
       'daily figure just climbs to catch up.</p></div>';

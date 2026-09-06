@@ -315,6 +315,7 @@ main { padding: 16px 16px 0; }
 .cal-cell.off { opacity: 0.42; }
 .cal-cell.today { border-color: var(--blue); box-shadow: 0 0 0 1px var(--blue) inset; }
 .cal-cell.done { background: rgba(34,197,94,0.18); border-color: rgba(34,197,94,0.45); }
+.cal-cell.part { background: rgba(245,158,11,0.15); border-color: rgba(245,158,11,0.4); }
 .cal-cell.missed { background: rgba(239,68,68,0.12); border-color: rgba(239,68,68,0.35); }
 .cal-cell.past { opacity: 0.8; }
 .cal-day { font-size: 0.8rem; font-weight: 650; }

@@ -27,11 +27,18 @@ money in                       what jobs brought in
 = what you keep
 ```
 
-You do not move that money yourself. What a day earns, after costs, the cut and tax,
-**goes across to the bills on its own** — nearest due date first, until the day's share
-is covered. Anything beyond that stays yours. Edit a job, delete one, change whose job
-it was, and the transfer is worked out again from scratch. It can be turned off under
-**More → Fund bills automatically**, which hands the job back to you.
+The daily figure is a **suggestion, not a deduction**. Nothing leaves your money until
+you tap **Set aside $X**, and you can put in more or less than it asks. What you keep
+today only ever drops by money that has actually gone across.
+
+Put in less and nothing is lost: once the day is closed out, the shortfall is spread
+over the days that are left, and tomorrow's figure goes up to match. Put in more and it
+goes down. Either way it adds up to the same bills, and the day says what the next one
+will ask for before you decide.
+
+Anyone who prefers it moved for them can switch on **More → Move it without asking**,
+which sends each day's takings — after costs, the cut and tax — to the bills on its own,
+nearest due date first.
 
 Run backwards, that same chain gives **break-even**: what the day has to bring in
 before you are working for nothing. It's on the Today screen while the day is still
@@ -118,7 +125,8 @@ want the detail; the choice is remembered.
   A bill can be added before you know its due date — it sits flagged as "needs a date"
   and stays out of the daily figure until you set one, rather than quietly skewing it.
 - **Plan** — a month calendar with the required amount on every future day, dropping
-  as bills finish. Completed days, missed days and days off are all marked. Paging
+  as bills finish. Past days are judged by the money that actually went across, not by
+  whether a button was pressed: covered, part paid, or nothing set aside. Paging
   forward keeps projecting from today, so a later month accounts for everything banked
   between now and then instead of re-charging bills that will already be paid.
 - **More** — automatic bill funding on or off, your workday pattern, cushion length,
