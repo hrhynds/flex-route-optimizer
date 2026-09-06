@@ -22,7 +22,7 @@
 
   var STORE_KEY = 'billcushion.v1';
   var BACKUP_KEY = 'billcushion.lastgood';   // the state as of the last clean open
-  var APP_VERSION = '2026.09.05';            // bump when shipping; shown under More
+  var APP_VERSION = '2026.09.06';            // bump when shipping; shown under More
   var MS_DAY = 86400000;
   var DOW_LONG = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
   var DOW_MID = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
@@ -157,6 +157,7 @@
         partner: { name: 'Logan', mode: 'none', value: 0 },
         taxRate: 0,
         autoSetAside: true,        // money earned funds the bills without being asked
+        showChain: false,          // the full where-it-went breakdown, folded until wanted
         cushionDays: 6,
         cushionMode: 'workdays',   // count the cushion in workdays, not calendar days
         countMode: 'workdays',     // 'workdays' | 'alldays' | 'estimate'
@@ -1026,6 +1027,24 @@
     return out.slice(0, limit || 6);
   }
 
+  /**
+   * Jobs you have logged before, most-repeated first. Logging the same detail
+   * for the same money is the common case, so it should cost one tap.
+   */
+  function recentJobs(limit) {
+    var seen = {}, out = [];
+    state.jobs.slice().sort(function (a, b) { return b.ts - a.ts; }).forEach(function (j) {
+      if (!(j.amount > 0)) return;
+      var key = j.amount + '|' + (j.service || '') + '|' + (jobHasCut(j) ? 'c' : 'm');
+      if (seen[key]) { seen[key].times++; return; }
+      seen[key] = { amount: j.amount, service: j.service || SERVICES[0],
+                    method: j.method || 'cash', cut: jobHasCut(j), times: 1 };
+      out.push(seen[key]);
+    });
+    out.sort(function (a, b) { return b.times - a.times; });
+    return out.slice(0, limit || 4);
+  }
+
   /** Everything spent in one category, with its own totals. */
   function categorySummary(cat, fromISO_, toISO_) {
     var list = state.expenses.filter(function (e) {
@@ -1323,7 +1342,17 @@
       '<div class="hero-actions"><div class="btn-row">' +
       '<button class="btn primary" data-act="add-job">＋ Job</button>' +
       '<button class="btn subtle" data-act="add-expense">＋ Expense</button>' +
-      '</div></div></div>';
+      '</div>' +
+      // A job you have done before is one tap, right where you would log a new one.
+      (function () {
+        var again = recentJobs(3);
+        if (!again.length) return '';
+        return '<div class="hero-again">' + again.map(function (r, i) {
+          return '<button class="chip" data-act="repeat-job" data-i="' + i + '">↻ ' +
+            money0(r.amount) + ' <span class="faint">' + esc(r.service) + '</span></button>';
+        }).join('') + '</div>';
+      })() +
+      '</div></div>';
 
     /* ---- break-even progress, while the day is still short ---- */
     if (be != null && m.revenue < be - 0.004 && (m.jobs || m.costs)) {
@@ -1340,22 +1369,37 @@
     // Only worth showing once there is work on the day — otherwise it would
     // read as a loss to someone who just tracks bills.
     if (m.jobs || m.costs) {
-      html += '<div class="card"><div class="card-title">Where today\'s money goes</div><div class="flow">';
-      html += flowRow('Money in', plural(m.jobs, 'job'), m.revenue, '');
-      if (m.costs > 0.004) html += flowRow('What it cost you', plural(expensesOn(t).length, 'expense'), -m.costs, 'out');
-      if (m.partner > 0.004) html += flowRow(esc(partnerName()) + '’s cut', partnerRule(), -m.partner, 'out');
-      if (m.tax > 0.004) html += flowRow('Tax put by', state.settings.taxRate + '%', -m.tax, 'out');
-      var auto = state.settings.autoSetAside;
-      if (m.bills > 0.004) {
-        html += flowRow(auto ? 'Set aside for bills' : 'Bills',
-          auto ? 'moved for you' : plural(day.planned.length, 'bill'),
-          -m.bills, 'out');
+      // Folded by default. The hero already answers "what do I keep"; this
+      // answers "why", which is not something you need on screen every time.
+      var openChain = !!state.settings.showChain;
+      html += '<div class="card"><button class="fold-head" data-act="toggle-chain">' +
+        '<div><div class="card-title" style="margin:0">Where today\'s money goes</div>' +
+        '<div class="lr-sub">' + money(m.revenue) + ' in' +
+        (m.costs > 0.004 || m.partner > 0.004 || m.tax > 0.004 || m.bills > 0.004
+          ? ' · ' + money(round2(m.costs + m.partner + m.tax + m.bills)) + ' spoken for'
+          : '') +
+        ' · ' + money(m.takeHome) + ' yours</div></div>' +
+        '<span class="fold-mark">' + (openChain ? '⌃' : '⌄') + '</span></button>';
+      if (openChain) {
+        html += '<div class="flow mt">';
+        html += flowRow('Money in', plural(m.jobs, 'job'), m.revenue, '');
+        if (m.costs > 0.004) html += flowRow('What it cost you', plural(expensesOn(t).length, 'expense'), -m.costs, 'out');
+        if (m.partner > 0.004) html += flowRow(esc(partnerName()) + '’s cut', partnerRule(), -m.partner, 'out');
+        if (m.tax > 0.004) html += flowRow('Tax put by', state.settings.taxRate + '%', -m.tax, 'out');
+        var auto = state.settings.autoSetAside;
+        if (m.bills > 0.004) {
+          html += flowRow(auto ? 'Set aside for bills' : 'Bills',
+            auto ? 'moved for you' : plural(day.planned.length, 'bill'),
+            -m.bills, 'out');
+        }
+        html += '<div class="flow-row total ' + (m.takeHome < 0 ? 'neg' : 'pos') + '">' +
+          '<div class="flow-label">You keep</div>' +
+          '<div class="flow-amt">' + money(m.takeHome) + '</div></div>';
+        html += '</div>';
       }
-      html += '<div class="flow-row total ' + (m.takeHome < 0 ? 'neg' : 'pos') + '">' +
-        '<div class="flow-label">You keep</div>' +
-        '<div class="flow-amt">' + money(m.takeHome) + '</div></div>';
-      html += '</div>';
-      if (m.billsShort > 0.004 && m.revenue > 0.004) {
+      // Only worth saying inside the breakdown — the Bill Money card below
+      // already carries this number in large type.
+      if (openChain && m.billsShort > 0.004 && m.revenue > 0.004) {
         html += '<div class="hint mt">Bills still want <strong>' + money(m.billsShort) +
           '</strong> today. Earn it and it goes across by itself — or it rolls into ' +
           'tomorrow\'s number.</div>';
@@ -1419,9 +1463,8 @@
 
       var behind = round2(sortedStatuses().reduce(function (a, x) { return a + x.shortfall; }, 0));
       if (behind > 0.5) {
-        html += '<div class="hint mb">Today\'s figure includes <strong>' + money(behind) +
-          '</strong> of catching up from days you missed — it spreads over the days you ' +
-          'have left, so staying on it clears the lot.</div>';
+        html += '<div class="hint mb">Includes <strong>' + money(behind) +
+          '</strong> of catching up. Stay on the number and it clears.</div>';
       }
 
       // One line first. The full list is a tap away rather than nine rows
@@ -1461,9 +1504,8 @@
           var spent = m.revenue > 0.004 && m.takeHome <= 0.004;
           if (spent) {
             html += '<button class="btn primary" data-act="complete-only">Mark today done</button>' +
-              '<div class="hint mt">Everything today made is already accounted for. The last ' +
-              money(day.remainingTotal) + ' would have to come out of savings — leave it and it ' +
-              'rolls into tomorrow\'s number instead.</div>' +
+              '<div class="hint mt">The last ' + money(day.remainingTotal) + ' would come out ' +
+              'of savings. Leave it and it rolls into tomorrow.</div>' +
               '<div class="btn-row mt"><button class="btn" data-act="custom-amount">Add from savings</button>' +
               '<button class="btn" data-act="skip-day">Couldn\'t today</button></div>';
           } else {
@@ -2672,15 +2714,30 @@
                      date: dateISO || todayISO(), note: '', partnerCut: true };
     var pRule = state.settings.partner || {};
     var cutApplies = pRule.mode !== 'none';
+    var detailsOpen = !isNew && !!(
+      (d.service && d.service !== SERVICES[0]) || d.client || d.note ||
+      (d.method && d.method !== 'cash') || d.date !== todayISO());
 
     var html = '<h2>' + (isNew ? 'Log a job' : 'Edit job') + '</h2>' +
-      '<div class="sheet-sub">What the job brought in.</div>' +
+      '<div class="sheet-sub">' + (isNew ? 'Just the amount is enough.' : 'What the job brought in.') + '</div>' +
       '<div class="field"><label>Amount</label>' +
       '<input id="j-amt" type="text" inputmode="decimal" value="' + (d.amount === '' ? '' : d.amount) + '" placeholder="0.00"></div>' +
       '<div class="chip-row mb" id="j-quick">' +
       [40, 60, 80, 120, 150, 200].map(function (n) {
         return '<button type="button" class="chip" data-set="' + n + '">$' + n + '</button>';
       }).join('') + '</div>' +
+      (cutApplies
+        ? '<div class="switch-row">' +
+          '<div><div class="sr-label">' + esc(partnerName()) + '\'s cut on this one</div>' +
+          '<div class="sr-hint">' + partnerRule() + ' — switch off if this job is all yours.</div></div>' +
+          '<button class="switch' + (jobHasCut(d) ? ' on' : '') + '" id="j-cut"></button></div>'
+        : '') +
+      // Most jobs are just an amount. Everything else folds away, and opens
+      // by itself when a job already carries any of it.
+      '<button class="btn primary" id="j-save" style="margin-bottom:10px">' +
+      (isNew ? 'Log it' : 'Save changes') + '</button>' +
+      '<details class="more-fields"' + (detailsOpen ? ' open' : '') + '>' +
+      '<summary>' + (detailsOpen ? 'Details' : 'Add details — service, who paid, date') + '</summary>' +
       '<div class="field"><label>Service</label><select id="j-service">' +
       SERVICES.map(function (x) {
         return '<option value="' + esc(x) + '"' + (d.service === x ? ' selected' : '') + '>' + esc(x) + '</option>';
@@ -2690,12 +2747,6 @@
         return '<button type="button" class="chip' + (d.method === x.v ? ' on' : '') +
           '" data-m="' + x.v + '">' + x.icon + ' ' + x.label + '</button>';
       }).join('') + '</div></div>' +
-      (cutApplies
-        ? '<div class="switch-row">' +
-          '<div><div class="sr-label">' + esc(partnerName()) + '\'s cut on this one</div>' +
-          '<div class="sr-hint">' + partnerRule() + ' — switch off if this job is all yours.</div></div>' +
-          '<button class="switch' + (jobHasCut(d) ? ' on' : '') + '" id="j-cut"></button></div>'
-        : '') +
       '<div class="field-row">' +
       '<div class="field"><label>Customer (optional)</label>' +
       '<input id="j-client" type="text" value="' + esc(d.client || '') + '" placeholder="Name" autocomplete="off"></div>' +
@@ -2703,8 +2754,7 @@
       '</div>' +
       '<div class="field"><label>Note (optional)</label>' +
       '<input id="j-note" type="text" value="' + esc(d.note || '') + '" placeholder="e.g. tipped $20"></div>' +
-      '<button class="btn primary" id="j-save" style="margin-bottom:8px">' +
-      (isNew ? 'Log it' : 'Save changes') + '</button>';
+      '</details>';
     if (!isNew) html += '<button class="btn danger" id="j-del" style="margin-bottom:8px">Delete this job</button>';
     html += '<button class="btn ghost" data-act="close-sheet">Cancel</button>';
 
@@ -2752,9 +2802,10 @@
         var moved = syncAutoSetAside(date);
         save(); closeSheet(); render();
         var m = dayMoney(date);
-        toast('✅ ' + money(amt) + ' logged' +
-          (moved > 0.004 ? ' · ' + money(moved) + ' straight to bills' : '') +
-          ' · ' + money(Math.max(0, m.takeHome)) + ' yours');
+        // The amount is this job; the rest is the whole day, so say which is which.
+        toast('✅ ' + money(amt) + ' logged · today: ' +
+          (m.bills > 0.004 ? money(m.bills) + ' to bills, ' : '') +
+          money(Math.max(0, m.takeHome)) + ' yours');
       });
 
       if (!isNew) {
@@ -2778,10 +2829,13 @@
     var d = exp || { amount: '', category: presetCat || 'supplies',
                      date: dateISO || todayISO(), item: '' };
     var again = isNew ? recentItems(null, 8) : [];
+    var eDetailsOpen = !isNew && !!(
+      (d.category && d.category !== 'supplies') || d.date !== todayISO());
 
     var html = '<h2>' + (isNew ? 'Log an expense' : 'Edit expense') + '</h2>' +
-      '<div class="sheet-sub">What the work cost you. Some days that\'s nothing — ' +
-      'there is no standing amount, only what you log.</div>';
+      '<div class="sheet-sub">' + (isNew
+        ? 'What it cost. Supplies unless you say otherwise.'
+        : 'What the work cost you.') + '</div>';
 
     if (again.length) {
       html += '<div class="field"><label>Bought before</label><div class="chip-row" id="e-again">' +
@@ -2797,14 +2851,19 @@
       '<input id="e-amt" type="text" inputmode="decimal" value="' + (d.amount === '' ? '' : d.amount) + '" placeholder="0.00"></div>' +
       '<div class="field"><label>What was it</label>' +
       '<input id="e-item" type="text" value="' + esc(d.item || '') + '" placeholder="e.g. wax, towels, tyre shine" autocomplete="off"></div>' +
+      '<button class="btn primary" id="e-save" style="margin-bottom:10px">' +
+      (isNew ? 'Log it' : 'Save changes') + '</button>' +
+      // Nearly everything is supplies on the day it happened, so the kind and
+      // the date only come out when they are actually wanted.
+      '<details class="more-fields"' + (eDetailsOpen ? ' open' : '') + '>' +
+      '<summary>' + (eDetailsOpen ? 'Details' : 'Add details — what kind, date') + '</summary>' +
       '<div class="field"><label>What kind</label><div class="chip-row" id="e-cat">' +
       EXPENSE_CATS.map(function (c) {
         return '<button type="button" class="chip' + (d.category === c.v ? ' on' : '') +
           '" data-c="' + c.v + '">' + c.icon + ' ' + c.label + '</button>';
       }).join('') + '</div></div>' +
       '<div class="field"><label>Date</label><input id="e-date" type="date" value="' + esc(d.date) + '"></div>' +
-      '<button class="btn primary" id="e-save" style="margin-bottom:8px">' +
-      (isNew ? 'Log it' : 'Save changes') + '</button>';
+      '</details>';
     if (!isNew) html += '<button class="btn danger" id="e-del" style="margin-bottom:8px">Delete this expense</button>';
     html += '<button class="btn ghost" data-act="close-sheet">Cancel</button>';
 
@@ -3550,13 +3609,27 @@
     var html = '<h2>How this works</h2>' +
       '<div class="sheet-sub">The short version, in plain words.</div>';
 
+    html += '<div class="card tight"><div class="card-title">Logging is two taps</div>' +
+      '<p class="small">Tap <strong>＋ Job</strong>, type what it paid, tap <strong>Log it</strong>. ' +
+      'That is the whole thing. Service, who paid, the customer and the date all sit under ' +
+      '<strong>Add details</strong> if you want them, and can be filled in later by tapping the ' +
+      'job. A job you have done before comes back as a chip under the buttons — one tap logs ' +
+      'it again.</p>' +
+      '<p class="small dim mt">Costs work the same way: amount, what it was, done. Anything ' +
+      'you do not say is treated as supplies, bought today.</p></div>';
+
+    // Built as a list: with no cut and no tax this used to read "takes off and
+    // today's share of your bills".
+    var takes = [];
+    if (hasCut) takes.push(esc(partnerName()) + '\'s cut');
+    if (hasTax) takes.push('tax');
+    takes.push('today\'s share of your bills');
+    var takesTxt = takes.length > 1
+      ? takes.slice(0, -1).join(', ') + ' and ' + takes[takes.length - 1]
+      : takes[0];
     html += '<div class="card tight"><div class="card-title">Every day</div>' +
-      '<p class="small">Log a job when you finish one. Log what you spent, if you spent ' +
-      'anything. The app takes off' +
-      (hasCut ? ' ' + esc(partnerName()) + '\'s cut' : '') +
-      (hasTax ? ', tax' : '') +
-      ' and today\'s share of your bills, and the big green number is what is ' +
-      '<strong>actually yours</strong>.</p></div>';
+      '<p class="small">The app takes off ' + takesTxt + ', and the big green number is ' +
+      'what is <strong>actually yours</strong>.</p></div>';
 
     html += '<div class="card tight"><div class="card-title">The bills</div>' +
       '<p class="small">Each bill is chopped into daily pieces so it is fully paid for ' +
@@ -3692,6 +3765,30 @@
         var plan = todayPlan();
         completeDay(iso, { amount: plan.remainingTotal });
         break;
+
+      case 'toggle-chain':
+        state.settings.showChain = !state.settings.showChain;
+        save(); render();
+        break;
+
+      case 'repeat-job': {
+        var again = recentJobs(4)[+t.dataset.i];
+        if (!again) break;
+        var madeJob = { id: uid(), date: todayISO(), amount: again.amount,
+          service: again.service, client: '', method: again.method, note: '',
+          partnerCut: again.cut, ts: Date.now() };
+        state.jobs.push(madeJob);
+        save(); render();
+        var mm = dayMoney(todayISO());
+        lastUndo = { fn: function () {
+          state.jobs = state.jobs.filter(function (x) { return x.id !== madeJob.id; });
+          syncAutoSetAside(madeJob.date); save(); render();
+        } };
+        toast('✅ ' + money(again.amount) + ' logged · today: ' +
+          (mm.bills > 0.004 ? money(mm.bills) + ' to bills, ' : '') +
+          money(Math.max(0, mm.takeHome)) + ' yours', 'Undo');
+        break;
+      }
 
       case 'complete-only':
         completeDay(iso, { amount: 0 });
