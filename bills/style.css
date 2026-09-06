@@ -400,6 +400,38 @@ main { padding: 16px 16px 0; }
 .field-row { display: flex; gap: 10px; }
 .field-row .field { flex: 1; }
 
+/* Optional fields, folded away. The inputs stay in the DOM either way, so
+   saving reads them whether or not the section was ever opened. */
+.more-fields { margin: 4px 0 10px; }
+.more-fields > summary {
+  list-style: none; cursor: pointer; user-select: none;
+  padding: 12px 13px; border: 1px solid var(--line);
+  border-radius: var(--radius-sm); background: var(--bg-elev-2);
+  color: var(--text-dim); font-size: 0.86rem; font-weight: 600;
+  display: flex; align-items: center; gap: 8px;
+}
+.more-fields > summary::-webkit-details-marker { display: none; }
+.more-fields > summary::marker { content: ''; }
+.more-fields > summary::after { content: '⌄'; margin-left: auto; font-size: 1.1rem; line-height: 1; }
+.more-fields[open] > summary { margin-bottom: 12px; }
+.more-fields[open] > summary::after { content: '⌃'; }
+
+/* A card heading that folds what is under it. */
+.fold-head {
+  width: 100%; background: none; border: none; padding: 0; text-align: left;
+  display: flex; align-items: center; gap: 10px; color: inherit; font: inherit;
+}
+.fold-head .lr-sub { margin-top: 3px; }
+.fold-mark { margin-left: auto; color: var(--text-faint); font-size: 1.1rem; line-height: 1; }
+
+/* Repeat-a-job chips, sitting under the hero's log buttons. */
+.hero-again { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 10px; }
+.hero-again .chip {
+  background: rgba(255,255,255,0.11); border-color: rgba(255,255,255,0.16);
+  color: #fff; font-size: 0.8rem; padding: 8px 12px;
+}
+.hero-again .chip .faint { color: rgba(255,255,255,0.6); }
+
 .dow-picker { display: grid; grid-template-columns: repeat(7, 1fr); gap: 5px; }
 .dow {
   min-height: var(--tap);

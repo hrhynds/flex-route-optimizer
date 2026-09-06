@@ -37,6 +37,12 @@ Run backwards, that same chain gives **break-even**: what the day has to bring i
 before you are working for nothing. It's on the Today screen while the day is still
 short, and as a dashed line across the 14-day chart.
 
+Logging is two taps: amount, then **Log it**. Service, who paid, the customer, the date
+and the note sit behind **Add details**, which opens by itself when a job already carries
+any of them — nothing is hidden from you, it just isn't in the way. Costs behave the same
+and assume supplies bought today. A job you've logged before comes back as a chip under
+the hero buttons, so repeating it costs one tap.
+
 Nothing is a lump sum. A job is logged with its amount, service, customer and how it
 was paid; a cost with what it was and what kind. Both are editable and deletable, and
 every figure re-runs the moment either changes.
@@ -91,6 +97,10 @@ daily figure has already absorbed it and the bill is still funded before it is d
 a bill past its funding date is flagged as urgent.
 
 ### What's in it
+
+The full where-it-went chain folds away behind its own heading, which carries the
+one-line version (`$200.00 in · $70.00 spoken for · $130.00 yours`). Open it when you
+want the detail; the choice is remembered.
 
 - **Today** — what you keep, the chain that gets there, the jobs and costs behind it,
   and the bill money still to move. One tap sets the bills aside and completes the day.
