@@ -22,7 +22,7 @@
 
   var STORE_KEY = 'billcushion.v1';
   var BACKUP_KEY = 'billcushion.lastgood';   // the state as of the last clean open
-  var APP_VERSION = '2026.09.08';            // bump when shipping; shown under More
+  var APP_VERSION = '2026.09.09';            // bump when shipping; shown under More
   var MS_DAY = 86400000;
   var DOW_LONG = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
   var DOW_MID = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
@@ -1707,6 +1707,24 @@
         '</button>';
     }
 
+    /* ---- what you owe the person you work with ---- */
+    // He never takes a share on his own now, so he has to stay visible: what is
+    // owed, and one tap to record paying it, without leaving Today.
+    if ((state.settings.partner || {}).mode !== 'none') {
+      var owedNow = owedTo('partner');
+      html += '<div class="card tight"><div class="card-title">' + esc(partnerName()) +
+        why('partner') + '<span class="faint" style="text-transform:none;letter-spacing:0">' +
+        (owedNow > 0.004 ? money(owedNow) + ' owed' : 'nothing owed') + '</span></div>' +
+        '<div class="lr-sub">' + (owedNow > 0.004
+          ? 'From jobs you marked as his. ' + partnerRule() + '.'
+          : 'Mark a job as his when you log it, or tap its chip afterwards — ' +
+            partnerRule() + '.') + '</div>' +
+        '<div class="btn-row mt">' +
+        '<button class="btn sm" data-act="pay-partner">Record a payment</button>' +
+        '<button class="btn sm ghost" data-act="go-business">See the history</button>' +
+        '</div></div>';
+    }
+
     /* ---- the bill set-aside, still the thing that has to happen ---- */
     if (bills.length && datedBills().length) {
       var putInToday = dayActual(t);
@@ -2993,6 +3011,9 @@
         var amt = parseFloat(input.value) || 0;
         var out = $('#a-preview', sheet);
         if (amt <= 0) { out.textContent = ''; return; }
+        // Correcting an existing entry does not re-split anything, so a
+        // "splits as" preview would be describing something that won't happen.
+        if (o.onSave) { out.textContent = ''; return; }
         if (o.billId) {
           var b = billById(o.billId);
           var after = round2(savedFor(b) + amt);
@@ -3015,6 +3036,9 @@
         var amt = round2(parseFloat(input.value));
         var note = $('#a-note', sheet).value.trim();
         if (!(amt > 0)) return toast('⚠️ Enter an amount');
+
+        // Callers that are changing something rather than adding money say so.
+        if (o.onSave) { o.onSave(amt, note); return; }
 
         if (o.billId) {
           var ids = logContributions(iso, [{ billId: o.billId, amount: amt }], { note: note });
@@ -3046,8 +3070,10 @@
 
   function jobSheet(job, dateISO) {
     var isNew = !job;
+    // A new job owes nobody anything until you say it does. Taking a share by
+    // default meant every job silently lost money you may never have owed.
     var d = job || { amount: '', service: SERVICES[0], client: '', method: 'cash',
-                     date: dateISO || todayISO(), note: '', partnerCut: true };
+                     date: dateISO || todayISO(), note: '', partnerCut: false };
     var pRule = state.settings.partner || {};
     var cutApplies = pRule.mode !== 'none';
     var detailsOpen = !isNew && !!(
@@ -3064,8 +3090,9 @@
       }).join('') + '</div>' +
       (cutApplies
         ? '<div class="switch-row">' +
-          '<div><div class="sr-label">' + esc(partnerName()) + '\'s cut on this one</div>' +
-          '<div class="sr-hint">' + partnerRule() + ' — switch off if this job is all yours.</div></div>' +
+          '<div><div class="sr-label">Pay ' + esc(partnerName()) + ' for this one?</div>' +
+          '<div class="sr-hint">' + partnerRule() + '. Off unless you turn it on — and you can ' +
+          'change it later from the job or the day.</div></div>' +
           '<button class="switch' + (jobHasCut(d) ? ' on' : '') + '" id="j-cut"></button></div>'
         : '') +
       // Most jobs are just an amount. Everything else folds away, and opens
@@ -3469,17 +3496,34 @@
       '<div class="sheet-sub">' + (funding ? 'Workday' : 'Day off') + ' · ' + relDay(iso) + '</div>';
 
     if (dm.revenue > 0.004 || dm.costs > 0.004) {
+      // Bill money set aside on a day can come from that day's takings or from
+      // savings you already had. Only the first kind reduces what the day kept,
+      // so the two are shown apart instead of one silently going missing.
+      var fromSavings = fromSavingsOn(iso);
       html += '<div class="card tight"><div class="card-title">That day\'s money</div><div class="flow">' +
         flowRow('Money in', plural(dm.jobs, 'job'), dm.revenue, '') +
         (dm.costs > 0.004 ? flowRow('Cost you', '', -dm.costs, 'out') : '') +
         (dm.partner > 0.004 ? flowRow(esc(partnerName()), '', -dm.partner, 'out') : '') +
         (dm.tax > 0.004 ? flowRow('Tax', '', -dm.tax, 'out') : '') +
-        (dm.bills > 0.004 ? flowRow('Bills', '', -dm.bills, 'out') : '') +
+        (dm.bills > 0.004
+          ? flowRow('To bills, out of that day', '', -dm.bills, 'out')
+          : (dm.revenue > 0.004 ? flowRow('To bills, out of that day', 'nothing yet', 0, '') : '')) +
         '<div class="flow-row total ' + (dm.takeHome < 0 ? 'neg' : 'pos') + '">' +
         '<div class="flow-label">Kept</div><div class="flow-amt">' + money(dm.takeHome) + '</div></div>' +
-        '</div></div>';
+        '</div>' +
+        (fromSavings > 0.004
+          ? '<div class="hint mt">A further <strong>' + money(fromSavings) + '</strong> went to bills ' +
+            'on this day out of money you already had. That is why it is not taken off the ' +
+            money(dm.takeHome) + ' above.</div>'
+          : '') +
+        '</div>';
 
-      jobsOn(iso).forEach(function (j) { html += jobRowHTML(j); });
+      var dayJobs = jobsOn(iso);
+      dayJobs.forEach(function (j) { html += jobRowHTML(j); });
+      if (dayJobs.length && (state.settings.partner || {}).mode !== 'none') {
+        html += '<div class="card tight" style="margin-top:10px">' +
+          partnerDaySwitch(iso, dayJobs, dm) + '</div>';
+      }
       expensesOn(iso).forEach(function (e) {
         var cat = EXPENSE_CATS.filter(function (c) { return c.v === e.category; })[0];
         html += '<button class="log-row" data-act="edit-expense" data-id="' + e.id + '">' +
@@ -3508,11 +3552,15 @@
       html += '<div class="card tight"><div class="card-title">Set aside that day</div>';
       contributionsOn(iso).forEach(function (c) {
         var b = c.billId === BUFFER_ID ? null : billById(c.billId);
-        html += '<div class="list-row"><div>' + (b ? esc(b.icon || '🧾') + ' ' + esc(b.name) : '💰 Extra buffer') + '</div>' +
-          '<div style="display:flex;align-items:center;gap:10px"><span class="lr-amt">+' + money(c.amount) + '</span>' +
+        html += '<div class="list-row"><div>' + (b ? esc(b.icon || '🧾') + ' ' + esc(b.name) : '💰 Extra buffer') +
+          '<div class="lr-sub">' + (c.note ? esc(c.note) : 'tap the amount to correct it') + '</div></div>' +
+          '<div style="display:flex;align-items:center;gap:8px">' +
+          '<button class="btn sm ghost" data-act="edit-contrib" data-cid="' + c.id + '">+' + money(c.amount) + '</button>' +
           '<button class="btn sm ghost" data-act="del-contrib" data-cid="' + c.id + '">✕</button></div></div>';
       });
-      html += '<div class="list-row"><div><strong>Total</strong></div><div class="lr-amt">' + money(actual) + '</div></div></div>';
+      html += '<div class="list-row"><div><strong>Total</strong></div><div class="lr-amt">' + money(actual) + '</div></div>' +
+        '<button class="btn sm ghost mt" data-act="log-for-day" data-date="' + iso + '">' +
+        '＋ Set aside more on this day</button></div>';
     }
 
     if (rec && rec.completed) {
@@ -4000,9 +4048,11 @@
         'build up as a running total on the <strong>Business</strong> tab. When you ' +
         'actually hand it over, record it there and the balance clears.</p>' +
         (hasCut
-          ? '<p class="small dim mt">Some jobs are not his. Tap the chip on any job to change ' +
-            'that one, or use <strong>Paying ' + esc(partnerName()) + ' for this day</strong> ' +
-            'under the day\'s jobs to switch the whole day at once.</p>'
+          ? '<p class="small dim mt">Nothing is ever paid to ' + esc(partnerName()) +
+            ' automatically. Every time you log money the switch is there, off, and you ' +
+            'turn it on for the jobs that are his. Got it wrong? Tap the chip on any job, ' +
+            'or use <strong>Paying ' + esc(partnerName()) + ' for this day</strong> to fix ' +
+            'a whole day at once — today or any day gone by.</p>'
           : '') +
         '</div>';
     }
@@ -4197,6 +4247,36 @@
         save(); closeSheet(); render();
         toast(on ? '🛌 ' + fmtDate(day) + ' is now a day off' : '💼 ' + fmtDate(day) + ' is now a workday');
         break;
+
+      // Correct a past entry rather than delete and re-add it.
+      case 'edit-contrib': {
+        var ecid = t.dataset.cid;
+        var ec = null;
+        state.contributions.forEach(function (c) { if (c.id === ecid) ec = c; });
+        if (!ec) break;
+        var eb = ec.billId === BUFFER_ID ? null : billById(ec.billId);
+        var wasAmt = ec.amount, wasNote = ec.note;
+        amountSheet({
+          title: 'Change this amount',
+          sub: (eb ? esc(eb.icon || '🧾') + ' ' + esc(eb.name) : '💰 Extra buffer') +
+            ' on ' + fmtDate(ec.date) + '. Put in what really went across — nothing else moves.',
+          value: wasAmt.toFixed(2),
+          note: ec.note || '',
+          date: ec.date,
+          onSave: function (amt, note) {
+            if (!(amt > 0.004)) return toast('⚠️ Use ✕ to remove it entirely');
+            ec.amount = round2(amt);
+            ec.note = note || '';
+            rev++; save(); closeSheet(); render();
+            if ($('.sheet')) daySheet(ec.date); else daySheet(ec.date);
+            lastUndo = { fn: function () {
+              ec.amount = wasAmt; ec.note = wasNote; rev++; save(); render();
+            } };
+            toast('✏️ Changed to ' + money(ec.amount), 'Undo');
+          }
+        });
+        break;
+      }
 
       case 'del-contrib':
         var cid = t.dataset.cid;

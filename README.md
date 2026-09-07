@@ -36,10 +36,13 @@ over the days that are left, and tomorrow's figure goes up to match. Put in more
 goes down. Either way it adds up to the same bills, and the day says what the next one
 will ask for before you decide.
 
-Whose job it was can be changed one at a time — tap the chip on any job — or for a whole
-day at once with **Paying <name> for this day**, under that day's jobs. Some days come
-entirely from the partner and some are entirely your own, and neither should cost more
-than one tap.
+Nobody is paid a share automatically. Every time you log money the switch is there and
+**off**; you turn it on for the jobs that are theirs. Their running balance and a
+**Record a payment** button sit on the first screen whether or not anything is owed, so
+the option never disappears just because a day owed nothing.
+
+Got it wrong? Tap the chip on any job for that one, or use **Paying <name> for this day**
+to fix a whole day at once — today or any day gone by.
 
 Anyone who prefers it moved for them can switch on **More → Move it without asking**,
 which sends each day's takings — after costs, the cut and tax — to the bills on its own,
@@ -149,7 +152,13 @@ the cushion is *how early to be ready*, and money set aside is money set aside.
   and stays out of the daily figure until you set one, rather than quietly skewing it.
 - **Plan** — a month calendar with the required amount on every future day, dropping
   as bills finish. Past days are judged by the money that actually went across, not by
-  whether a button was pressed: covered, part paid, or nothing set aside. Paging
+  whether a button was pressed: covered, part paid, or nothing set aside. Tap any day to
+  put it right: add a job or a cost, switch the whole day's partner share, correct a
+  set-aside amount rather than deleting it, add more, or reopen it.
+
+A day's bill money can come from that day's takings or from savings you already had.
+Only the first kind reduces what the day kept, so the two are listed apart and the
+second is named and explained rather than silently left out. Paging
   forward keeps projecting from today, so a later month accounts for everything banked
   between now and then instead of re-charging bills that will already be paid.
 - **More** — automatic bill funding on or off, your workday pattern, cushion length,
