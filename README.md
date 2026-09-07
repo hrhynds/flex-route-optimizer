@@ -36,6 +36,11 @@ over the days that are left, and tomorrow's figure goes up to match. Put in more
 goes down. Either way it adds up to the same bills, and the day says what the next one
 will ask for before you decide.
 
+Whose job it was can be changed one at a time — tap the chip on any job — or for a whole
+day at once with **Paying <name> for this day**, under that day's jobs. Some days come
+entirely from the partner and some are entirely your own, and neither should cost more
+than one tap.
+
 Anyone who prefers it moved for them can switch on **More → Move it without asking**,
 which sends each day's takings — after costs, the cut and tax — to the bills on its own,
 nearest due date first.
@@ -105,9 +110,27 @@ a bill past its funding date is flagged as urgent.
 
 ### What's in it
 
-The full where-it-went chain folds away behind its own heading, which carries the
-one-line version (`$200.00 in · $70.00 spoken for · $130.00 yours`). Open it when you
-want the detail; the choice is remembered.
+### Simple and Advanced
+
+The app opens in **Simple**, where the first screen answers only today's questions —
+what's yours, what to set aside, what you logged — and nothing else. **Advanced** puts
+every figure back: the where-it-went chain, the week's running totals, and jobs and
+costs as separate cards. The switch lives under **More → How much do you want to see**,
+with a shortcut at the bottom of Today. Nothing is ever removed by Simple, only folded,
+and the choice is remembered.
+
+In Advanced, the full where-it-went chain folds away behind its own heading, which
+carries the one-line version (`$200.00 in · $70.00 spoken for · $130.00 yours`).
+
+### Every number explains itself
+
+Figures carry a small **?**. Tapping it says what the number means in plain words and
+shows the sum it came from, using the amounts actually in play — not an example. It
+covers what you keep, today's suggested bill money, days to spare, what the day needs
+to make, the partner's share, tax, the month's total, and the per-day rate.
+
+There is no finance jargon in the interface. "Break-even" is *what today needs to make*,
+the cushion is *how early to be ready*, and money set aside is money set aside.
 
 - **Today** — what you keep, the chain that gets there, the jobs and costs behind it,
   and the bill money still to move. One tap sets the bills aside and completes the day.

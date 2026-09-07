@@ -22,7 +22,7 @@
 
   var STORE_KEY = 'billcushion.v1';
   var BACKUP_KEY = 'billcushion.lastgood';   // the state as of the last clean open
-  var APP_VERSION = '2026.09.07';            // bump when shipping; shown under More
+  var APP_VERSION = '2026.09.08';            // bump when shipping; shown under More
   var MS_DAY = 86400000;
   var DOW_LONG = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
   var DOW_MID = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
@@ -157,6 +157,7 @@
         partner: { name: 'Logan', mode: 'none', value: 0 },
         taxRate: 0,
         autoSetAside: false,       // opt-in: move the day's share without being asked
+        mode: 'simple',            // 'simple' shows only what today needs; 'advanced' shows the lot
         showChain: false,          // the full where-it-went breakdown, folded until wanted
         cushionDays: 6,
         cushionMode: 'workdays',   // count the cushion in workdays, not calendar days
@@ -1309,6 +1310,200 @@
   }
 
   /* ---------------------------------------------------------------------------
+     6b. Plain-English explanations
+     -----------------------------------------------------------------------------
+     Every figure on screen can say what it means and show its own arithmetic
+     with the numbers actually in play. A person should never have to guess
+     where a number came from, and should never need this file to find out.
+     ------------------------------------------------------------------------ */
+
+  /** Simple keeps the day's questions on screen and folds the rest away. */
+  function isSimple() { return (state.settings.mode || 'simple') !== 'advanced'; }
+
+  /** A small tappable "?" that opens the explanation for one figure. */
+  function why(key) {
+    return '<button class="why" data-act="explain" data-key="' + esc(key) +
+      '" aria-label="What does this number mean?">?</button>';
+  }
+
+  var EXPLAIN = {
+    keep: function () {
+      var t = todayISO(), m = dayMoney(t);
+      var rows = [['Money the work brought in', m.revenue]];
+      if (m.costs > 0.004) rows.push(['What you spent on it', -m.costs]);
+      if (m.partner > 0.004) rows.push([partnerName() + '\u2019s share', -m.partner]);
+      if (m.tax > 0.004) rows.push(['Tax put by', -m.tax]);
+      if (m.bills > 0.004) rows.push(['Money you set aside for bills', -m.bills]);
+      return {
+        title: 'Where does this number come from?',
+        lead: 'This is the money from today that is actually yours — what came in, ' +
+          'less everything that was already spoken for.',
+        rows: rows, total: ['Yours', m.takeHome],
+        foot: m.billsShort > 0.004
+          ? 'The ' + money(m.billsShort) + ' the bills suggest for today has <em>not</em> been ' +
+            'taken off. Nothing moves until you tap Set aside.'
+          : ''
+      };
+    },
+
+    ask: function () {
+      var day = todayPlan();
+      var rows = day.remaining.slice(0, 6).map(function (it) {
+        return [(it.icon || '') + ' ' + it.name +
+          (it.fundingLeft ? ' — ' + money(it.remaining) + ' left over ' +
+            plural(it.fundingLeft, unitWord()) : ''), it.amount];
+      });
+      var behind = round2(sortedStatuses().reduce(function (a, x) { return a + x.shortfall; }, 0));
+      return {
+        title: 'How is today\u2019s amount worked out?',
+        lead: 'Each bill is split into equal daily pieces, so it is paid for in full ' +
+          'before its due date. This is those pieces added together.',
+        rows: rows, total: ['Suggested today', day.remainingTotal],
+        foot: behind > 0.5
+          ? money(behind) + ' of that is catching up from days nothing went in. It is spread ' +
+            'over the days you have left, so keeping to the number clears it.'
+          : 'Put in less and the rest moves to the days you have left, and they go up a little.'
+      };
+    },
+
+    spare: function () {
+      var t = tightestSlack();
+      if (!t) return { title: 'Days to spare', lead: 'Nothing is being tracked yet.', rows: [] };
+      return {
+        title: 'What does \u201cdays to spare\u201d mean?',
+        lead: 'How many working days you could take off and still pay everything on time. ' +
+          'It starts at your safety margin of ' + cushionWords() + ' and drops a day for every ' +
+          'day nothing goes in.',
+        rows: [], total: null,
+        foot: 'Tightest right now is <strong>' + esc(t.bill.name) + '</strong>, due ' +
+          fmtDate(t.bill.dueDate) + '. Using the margin up is not trouble — the daily ' +
+          'amount just climbs to cover it.'
+      };
+    },
+
+    target: function () {
+      var t = todayISO(), m = dayMoney(t), be = breakEvenOn(t);
+      var rows = [];
+      if (m.costs > 0.004) rows.push(['What today has cost so far', m.costs]);
+      if (m.billsAsk > 0.004) rows.push(['What the bills suggest today', m.billsAsk]);
+      if (m.partner > 0.004 || (state.settings.partner || {}).mode !== 'none') {
+        rows.push([partnerName() + '\u2019s share of it', round2(Math.max(0, (be || 0) - m.costs - m.billsAsk - m.tax))]);
+      }
+      return {
+        title: 'What is this target?',
+        lead: 'What today would have to bring in to cover its costs, ' +
+          (((state.settings.partner || {}).mode !== 'none') ? partnerName() + '\u2019s share, ' : '') +
+          (taxRate() ? 'tax, ' : '') + 'and the bill money it suggests — with nothing left over.',
+        rows: rows, total: ['Today needs to make', be || 0],
+        foot: 'Earn more than this and the extra is yours.'
+      };
+    },
+
+    partner: function () {
+      var t = todayISO();
+      var owed = jobsOn(t).filter(jobHasCut);
+      return {
+        title: 'Why is ' + esc(partnerName()) + '\u2019s share taken out?',
+        lead: 'Jobs that came from ' + esc(partnerName()) + ' owe a share: ' + partnerRule() +
+          '. Jobs you found yourself owe nothing.',
+        rows: (state.settings.partner || {}).mode === 'perJob'
+          ? owed.map(function (j) {
+              return [(j.service || 'Job') + ' \u00b7 ' + money(j.amount),
+                      round2((state.settings.partner || {}).value || 0)];
+            })
+          : owed.map(function (j) { return [(j.service || 'Job') + ' came from him', j.amount]; }),
+        total: ['Owed on today', partnerCutOn(t)],
+        foot: 'Any job can be switched either way — tap its chip, or use the switch on ' +
+          'the day to change every job at once.'
+      };
+    },
+
+    tax: function () {
+      var t = todayISO(), m = dayMoney(t);
+      return {
+        title: 'How is the tax figure worked out?',
+        lead: 'It is ' + taxRate() * 100 + '% of what is left once costs and any share are out. ' +
+          'It is only set aside here, never sent anywhere.',
+        rows: [['Money in', m.revenue], ['Less what you spent', -m.costs],
+               ['Less ' + partnerName() + '\u2019s share', -m.partner]],
+        total: ['Tax put by (' + taxRate() * 100 + '%)', m.tax],
+        foot: 'Turn it off under More if you are not taxed on this.'
+      };
+    },
+
+    saved: function () {
+      var list = sortedStatuses();
+      return {
+        title: 'What is this total?',
+        lead: 'Every dollar you have set aside so far, across all your bills. It should ' +
+          'match what is actually sitting in your bill money.',
+        rows: list.filter(function (x) { return x.saved > 0.004; })
+          .map(function (x) { return [(x.bill.icon || '') + ' ' + x.bill.name, x.saved]; }),
+        total: ['Set aside so far', round2(list.reduce(function (a, x) { return a + x.saved; }, 0))],
+        foot: ''
+      };
+    },
+
+    perday: function () {
+      var list = sortedStatuses().filter(function (x) { return x.perDay > 0.004; });
+      return {
+        title: 'Why this much a day?',
+        lead: 'Each bill needs a certain amount before its due date. Divide what is left ' +
+          'by the working days you have, and this is the total.',
+        rows: list.map(function (x) {
+          return [(x.bill.icon || '') + ' ' + x.bill.name + ' — ' + money(x.remaining) +
+            ' over ' + plural(x.fundingLeft, unitWord()), x.perDay];
+        }),
+        total: ['Every working day', round2(list.reduce(function (a, x) { return a + x.perDay; }, 0))],
+        foot: 'Work extra days and it falls. Miss days and it climbs. It always adds up ' +
+          'to the same bills.'
+      };
+    },
+
+    monthyours: function () {
+      var r = rangeMoney(monthWindow().start, todayISO());
+      return {
+        title: 'What does this month\u2019s figure include?',
+        lead: 'What the work has made you this month, before any of it goes to bills.',
+        rows: [['Money in', r.revenue], ['What you spent', -r.costs],
+               [partnerName() + '\u2019s share', -r.partner], ['Tax put by', -r.tax]],
+        total: ['Yours this month', r.earned],
+        foot: money(r.billsSetAside) + ' of it has gone into bill money so far. That is ' +
+          'moved, not spent — it is still your money, waiting for a bill.'
+      };
+    }
+  };
+
+  function explainSheet(key) {
+    var make = EXPLAIN[key];
+    if (!make) return;
+    var e;
+    try { e = make(); } catch (err) { console.warn('explain', key, err); return; }
+
+    var html = '<h2>' + e.title + '</h2>';
+    if (e.lead) html += '<div class="sheet-sub">' + e.lead + '</div>';
+    if (e.rows && e.rows.length) {
+      html += '<div class="card tight"><div class="flow">';
+      e.rows.forEach(function (r) {
+        html += '<div class="flow-row"><div class="flow-label">' + esc(String(r[0])) + '</div>' +
+          '<div class="flow-amt">' + money(r[1]) + '</div></div>';
+      });
+      if (e.total) {
+        html += '<div class="flow-row total pos"><div class="flow-label">' + esc(e.total[0]) +
+          '</div><div class="flow-amt">' + money(e.total[1]) + '</div></div>';
+      }
+      html += '</div></div>';
+    } else if (e.total) {
+      html += '<div class="card tight"><div class="flow"><div class="flow-row total pos">' +
+        '<div class="flow-label">' + esc(e.total[0]) + '</div>' +
+        '<div class="flow-amt">' + money(e.total[1]) + '</div></div></div></div>';
+    }
+    if (e.foot) html += '<p class="small dim">' + e.foot + '</p>';
+    html += '<button class="btn ghost mt" data-act="close-sheet">Got it</button>';
+    openSheet(html);
+  }
+
+  /* ---------------------------------------------------------------------------
      7. Rendering
      ------------------------------------------------------------------------ */
 
@@ -1385,7 +1580,7 @@
     }
 
     html += '<div class="' + cls + '">' +
-      '<div class="hero-eyebrow">' + eyebrow + '</div>' +
+      '<div class="hero-eyebrow">' + eyebrow + (m.jobs || m.costs ? why('keep') : '') + '</div>' +
       '<div class="hero-amount">' + amount + '</div>' +
       '<div class="hero-sub">' + sub + '</div>' +
       '<div class="hero-actions"><div class="btn-row">' +
@@ -1406,18 +1601,18 @@
     /* ---- break-even progress, while the day is still short ---- */
     if (be != null && m.revenue < be - 0.004 && (m.jobs || m.costs)) {
       var pctDone = be > 0 ? clamp(m.revenue / be, 0, 1) : 1;
-      html += '<div class="card tight"><div class="card-title">Today\'s target' +
+      html += '<div class="card tight"><div class="card-title">Today needs to make' + why('target') +
         '<span class="faint" style="text-transform:none;letter-spacing:0">' +
         money(m.revenue) + ' of ' + money(be) + '</span></div>' +
         '<div class="bar"><div class="bar-fill" style="width:' + pct(pctDone) + '%"></div></div>' +
         '<div class="small dim mt"><strong>' + money(be - m.revenue) + ' more</strong> ' +
-        'and today has paid for itself.</div></div>';
+        'and today has covered its costs and its bill money.</div></div>';
     }
 
     /* ---- the chain ---- */
     // Only worth showing once there is work on the day — otherwise it would
     // read as a loss to someone who just tracks bills.
-    if (m.jobs || m.costs) {
+    if ((m.jobs || m.costs) && !isSimple()) {
       // Folded by default. The hero already answers "what do I keep"; this
       // answers "why", which is not something you need on screen every time.
       var openChain = !!state.settings.showChain;
@@ -1457,28 +1652,41 @@
       html += '</div>';
     }
 
-    /* ---- today's jobs ---- */
+    /* ---- what happened today ---- */
+    // Simple keeps the work and what it cost in one place, because they are the
+    // same question: what did today look like? Advanced keeps them apart.
     var jl = jobsOn(t).sort(function (a, b) { return b.ts - a.ts; });
-    if (jl.length) {
-      html += '<div class="card"><div class="card-title">Jobs today' +
-        '<span class="faint" style="text-transform:none;letter-spacing:0">' + money(m.revenue) + '</span></div>';
+    var el = expensesOn(t).sort(function (a, b) { return b.ts - a.ts; });
+    var oneLog = isSimple() && (jl.length || el.length);
+
+    if (oneLog) {
+      html += '<div class="card"><div class="card-title">Today so far' +
+        '<span class="faint" style="text-transform:none;letter-spacing:0">' +
+        plural(jl.length, 'job') + ' · ' + money(m.revenue) + ' in</span></div>';
       jl.forEach(function (j) { html += jobRowHTML(j); });
+      el.forEach(function (e) { html += expenseRowHTML(e); });
+      if ((state.settings.partner || {}).mode !== 'none' && jl.length) {
+        html += partnerDaySwitch(t, jl, m);
+      }
       html += '</div>';
     }
 
-    /* ---- today's costs ---- */
-    var el = expensesOn(t).sort(function (a, b) { return b.ts - a.ts; });
-    if (el.length) {
+    if (jl.length && !oneLog) {
+      html += '<div class="card"><div class="card-title">Jobs today' +
+        '<span class="faint" style="text-transform:none;letter-spacing:0">' + money(m.revenue) + '</span></div>';
+      jl.forEach(function (j) { html += jobRowHTML(j); });
+      // Some days are all his and some are all yours. One switch beats tapping
+      // every row, and the per-job chips are still there for a mixed day.
+      if ((state.settings.partner || {}).mode !== 'none') {
+        html += partnerDaySwitch(t, jl, m);
+      }
+      html += '</div>';
+    }
+
+    if (el.length && !oneLog) {
       html += '<div class="card"><div class="card-title">Spent today' +
         '<span class="faint" style="text-transform:none;letter-spacing:0">' + money(m.costs) + '</span></div>';
-      el.forEach(function (e) {
-        var cat = EXPENSE_CATS.filter(function (x) { return x.v === e.category; })[0];
-        html += '<button class="log-row" data-act="edit-expense" data-id="' + e.id + '">' +
-          '<div class="log-ico">' + (cat ? cat.icon : '📎') + '</div>' +
-          '<div class="log-main"><div class="log-title">' + esc(e.item || (cat ? cat.label : 'Other')) + '</div>' +
-          '<div class="log-sub">' + (cat ? cat.label : 'Other') + '</div></div>' +
-          '<div class="log-amt out">−' + money(e.amount) + '</div></button>';
-      });
+      el.forEach(function (e) { html += expenseRowHTML(e); });
       html += '</div>';
     }
 
@@ -1502,7 +1710,7 @@
     /* ---- the bill set-aside, still the thing that has to happen ---- */
     if (bills.length && datedBills().length) {
       var putInToday = dayActual(t);
-      html += '<div class="card"><div class="card-title">Bill money' +
+      html += '<div class="card"><div class="card-title">Money for bills' + why('ask') +
         '<span class="faint" style="text-transform:none;letter-spacing:0" id="bill-state">' +
         (done ? 'day complete ✓' : (day.remainingTotal > 0.004 ? 'recommended today' : 'all covered ✓')) +
         '</span></div>' +
@@ -1510,7 +1718,8 @@
         '<div class="money" id="bill-ask" style="font-size:1.6rem;font-weight:800;letter-spacing:-0.6px">' +
         money(day.remainingTotal) + '</div>' +
         '<div class="small dim" id="bill-slack">' +
-        (slackPhrase().replace(/^ · /, '') || plural(day.remaining.length, 'bill')) + '</div></div>';
+        (slackPhrase().replace(/^ · /, '') || plural(day.remaining.length, 'bill')) +
+        why('spare') + '</div></div>';
 
       // Two lines at most: what this number is made of, and what happens if
       // you put in less than it. Any more and the card becomes an essay.
@@ -1582,11 +1791,22 @@
     }
 
     /* ---- headline numbers ---- */
+    // The week's running totals are last week's question, not today's, so
+    // Simple leaves them to the Business tab where they belong.
     var wk = weekWindow();
     var w = rangeMoney(wk.start, wk.end);
-    // Read across, these tell the same story as the day above: what came in,
-    // what the bills took, what is left. A bare "Yours" here meant money before
-    // bills, which sat on screen contradicting the hero's take-home.
+    if (isSimple()) {
+      html += '<div class="card tight"><div class="list-row" style="border-bottom:none">' +
+        '<div><div class="small">This week so far</div><div class="lr-sub" id="day-streak">' +
+        plural(w.worked, 'day') + ' worked · ' + money(w.billsSetAside) + ' to bills · ' +
+        streak() + '🔥 day streak</div></div>' +
+        '<div class="lr-amt">' + money0(w.revenue) + '</div></div>' +
+        '<div class="btn-row mt"><button class="btn sm ghost" data-act="go-business">See the full picture</button>' +
+        '<button class="btn sm ghost" data-act="set-mode" data-mode="advanced">Show every figure</button>' +
+        '</div></div>';
+      host.innerHTML = html;
+      return;
+    }
     html += '<div class="card tight"><div class="stat-grid">' +
       '<div class="stat"><div class="stat-val money">' + money0(w.revenue) + '</div><div class="stat-lbl">In this week</div></div>' +
       '<div class="stat"><div class="stat-val money">' + money0(w.billsSetAside) + '</div><div class="stat-lbl">To bills</div></div>' +
@@ -1594,9 +1814,38 @@
       '</div>' +
       '<div class="list-row" style="border-bottom:none;padding-bottom:0"><div class="lr-sub">' +
       plural(w.worked, 'day') + ' worked this week</div>' +
-      '<div class="lr-sub" id="day-streak">' + streak() + '🔥 day streak</div></div></div>';
+      '<div class="lr-sub">' + streak() + '🔥 day streak</div></div></div>';
 
     host.innerHTML = html;
+  }
+
+  /** One logged cost, as a tappable row. */
+  function expenseRowHTML(e) {
+    var cat = EXPENSE_CATS.filter(function (x) { return x.v === e.category; })[0];
+    return '<button class="log-row" data-act="edit-expense" data-id="' + e.id + '">' +
+      '<div class="log-ico">' + (cat ? cat.icon : '📎') + '</div>' +
+      '<div class="log-main"><div class="log-title">' + esc(e.item || (cat ? cat.label : 'Other')) + '</div>' +
+      '<div class="log-sub">' + (cat ? cat.label : 'Other') + '</div></div>' +
+      '<div class="log-amt out">−' + money(e.amount) + '</div></button>';
+  }
+
+  /**
+   * One switch for a whole day's worth of jobs. Some days come entirely from
+   * the partner and some are entirely your own; tapping every row to say so is
+   * work the app should be doing.
+   */
+  function partnerDaySwitch(iso, jl, m) {
+    var allHis = jl.every(jobHasCut);
+    return '<div class="switch-row" style="border-bottom:none;padding-bottom:0">' +
+      '<div><div class="sr-label">Paying ' + esc(partnerName()) + ' for this day' + why('partner') + '</div>' +
+      '<div class="sr-hint">' + (allHis
+        ? 'Every job came from ' + esc(partnerName()) + ' — ' + money(m.partner) + ' owed.'
+        : (jl.some(jobHasCut)
+          ? 'Some of the day is his. Switch to make every job his, or tap a chip ' +
+            'above to change just one.'
+          : 'Nothing owed — every job is your own.')) + '</div></div>' +
+      '<button class="switch' + (allHis ? ' on' : '') + '" data-act="toggle-day-cut" ' +
+      'data-date="' + iso + '"></button></div>';
   }
 
   /**
@@ -1659,7 +1908,7 @@
   function slackPhrase() {
     var t = tightestSlack();
     if (!t) return '';
-    if (t.slack <= 0) return ' · <strong>cushion used up</strong>';
+    if (t.slack <= 0) return ' · <strong>safety margin used up</strong>';
     return ' · ' + plural(t.slack, 'day') + ' to spare';
   }
 
@@ -1737,15 +1986,18 @@
           'Keep to ' + money(perDayAll) + ' a ' + unitWord() + ' and every one is ready before it is due. ' +
           'Next up ' + esc(next.bill.name) + ', fully funded by ' + fmtDate(next.target) + '.' +
           (tight.length ? ' ' + plural(tight.length, 'bill') + ' ' +
-            (tight.length === 1 ? 'has' : 'have') + ' no cushion left, so try not to miss a day.' : '');
+            (tight.length === 1 ? 'has' : 'have') + ' no safety margin left, so try not to miss a day.' : '');
       }
       html += '<div class="banner ' + tone + '"><span>' + icon + '</span><div>' + text + '</div></div>';
     }
 
     html += '<div class="card tight"><div class="stat-grid">' +
-      '<div class="stat"><div class="stat-val money">' + money0(totalSaved) + '</div><div class="stat-lbl">Saved</div></div>' +
-      '<div class="stat"><div class="stat-val money">' + money0(Math.max(0, totalAmt - totalSaved)) + '</div><div class="stat-lbl">Still needed</div></div>' +
-      '<div class="stat"><div class="stat-val money">' + money0(perDayAll) + '</div><div class="stat-lbl">Per workday</div></div>' +
+      '<div class="stat"><div class="stat-val money">' + money0(totalSaved) + '</div>' +
+      '<div class="stat-lbl">Set aside' + why('saved') + '</div></div>' +
+      '<div class="stat"><div class="stat-val money">' + money0(Math.max(0, totalAmt - totalSaved)) + '</div>' +
+      '<div class="stat-lbl">Still to find</div></div>' +
+      '<div class="stat"><div class="stat-val money">' + money0(perDayAll) + '</div>' +
+      '<div class="stat-lbl">Each ' + unitWord() + why('perday') + '</div></div>' +
       '</div>';
     if (buf > 0.004) {
       html += '<div class="list-row" style="margin-top:6px"><div><div>💰 Extra buffer</div>' +
@@ -1813,7 +2065,7 @@
       '<span>Fully funded by <strong>' + fmtDate(s.target, 'dow') + '</strong></span>' +
       '<span class="faint">· due ' + fmtDate(b.dueDate) + ' (' + relDay(b.dueDate) + ')</span>' +
       (s.remaining > 0.004 && s.slack <= 1
-        ? '<span>· <strong>' + (s.slack <= 0 ? 'cushion used up' : '1 day to spare') + '</strong></span>'
+        ? '<span>· <strong>' + (s.slack <= 0 ? 'safety margin used up' : '1 day to spare') + '</strong></span>'
         : '') +
       (s.key === 'behind' ? '<span>· <strong>' + money(s.shortfall) + ' behind pace</strong></span>' : '') +
       '</div></button>';
@@ -1842,7 +2094,8 @@
     html += '<div class="card tight"><div class="card-title">' + MON_LONG[fromISO(t).getMonth()] + ' so far</div>' +
       '<div class="stat-grid">' +
       '<div class="stat"><div class="stat-val money">' + money0(mon.revenue) + '</div><div class="stat-lbl">Money in</div></div>' +
-      '<div class="stat"><div class="stat-val money">' + money0(mon.earned) + '</div><div class="stat-lbl">Yours</div></div>' +
+      '<div class="stat"><div class="stat-val money">' + money0(mon.earned) + '</div>' +
+      '<div class="stat-lbl">Yours' + why('monthyours') + '</div></div>' +
       '<div class="stat"><div class="stat-val">' + mon.jobs + '</div><div class="stat-lbl">Jobs</div></div>' +
       '</div>';
     html += '<div class="hint" style="margin-top:8px">"Yours" is what the work made you — ' +
@@ -2039,8 +2292,8 @@
 
     html += '<div class="chart-legend">' +
       '<span><i style="background:' + cols[0] + '"></i>money in</span>' +
-      '<span><i style="background:' + cols[0] + ';opacity:.42"></i>under break-even</span>' +
-      (goal > 0 ? '<span><i class="dash"></i>break-even today, ' + money0(goal) + '</span>' : '') +
+      '<span><i style="background:' + cols[0] + ';opacity:.42"></i>below what the day needed</span>' +
+      (goal > 0 ? '<span><i class="dash"></i>what today needs, ' + money0(goal) + '</span>' : '') +
       '</div></div></div>';
     return html;
   }
@@ -2158,9 +2411,9 @@
     html += '</div>';
 
     // cushion control
-    html += '<div class="card"><div class="card-title">Safety cushion</div>' +
+    html += '<div class="card"><div class="card-title">How early to be ready</div>' +
       '<p class="small dim mb">Every bill is fully funded this far <em>before</em> its due date. ' +
-      'A bigger cushion means a slightly higher daily amount, but more breathing room.</p>' +
+      'Being ready earlier means a slightly higher daily amount, but more breathing room.</p>' +
       '<div class="chip-row mb">' +
       [0, 3, 5, 6, 7, 10, 14].map(function (n) {
         return '<button class="chip' + (state.settings.cushionDays === n ? ' on' : '') +
@@ -2184,6 +2437,17 @@
     var html = '';
 
     var pp = s.partner || {};
+
+    html += '<div class="card"><div class="card-title">How much do you want to see?</div>' +
+      '<div class="mode-row">' +
+      '<button class="chip' + (isSimple() ? ' on' : '') + '" data-act="set-mode" data-mode="simple">' +
+      '☀️ Simple</button>' +
+      '<button class="chip' + (isSimple() ? '' : ' on') + '" data-act="set-mode" data-mode="advanced">' +
+      '🔬 Advanced</button></div>' +
+      '<p class="small dim mt">Simple keeps today\'s questions on screen and folds the rest ' +
+      'away. Advanced puts every figure back — the running totals, the day-by-day breakdown ' +
+      'and the charts. Nothing is ever removed, and you can switch back any time.</p></div>';
+
     html += '<div class="card"><div class="card-title">Bill money</div>' +
       '<div class="switch-row"><div><div class="sr-label">Move it without asking</div>' +
       '<div class="sr-hint">Off by default: the app suggests an amount each day and you ' +
@@ -2195,7 +2459,7 @@
       '<button class="switch' + (s.autoSetAside ? ' on' : '') + '" data-act="toggle-auto"></button>' +
       '</div></div>';
 
-    html += '<div class="card"><div class="card-title">Splits &amp; tax</div>' +
+    html += '<div class="card"><div class="card-title">Who gets a share, and tax</div>' +
       '<div class="list-row"><div><div>' +
       (pp.mode === 'none' ? 'Nobody takes a cut' : esc(pp.name || 'Partner') + '\'s cut') + '</div>' +
       '<div class="lr-sub">' + (pp.mode === 'none' ? 'Everything after costs is yours' : partnerRule()) + '</div></div>' +
@@ -2242,7 +2506,7 @@
     }
     html += '</div>';
 
-    html += '<div class="card"><div class="card-title">Daily amounts</div>' +
+    html += '<div class="card"><div class="card-title">Rounding the daily amount</div>' +
       '<div class="switch-row"><div><div class="sr-label">Safety cushion</div>' +
       '<div class="sr-hint">Bills are fully funded ' + cushionWords() + ' early.</div></div></div>' +
       '<div class="chip-row mb">' +
@@ -2311,7 +2575,7 @@
       '<button class="btn" data-act="copy-backup">⧉ Copy</button></div>' +
       '<button class="btn ghost" data-act="import">📋 Paste a setup code or backup</button></div>';
 
-    html += '<div class="card"><div class="card-title">How the math works</div>' +
+    html += '<div class="card"><div class="card-title">How the numbers are worked out</div>' +
       '<p class="small dim">For every bill:</p>' +
       '<p class="small mt" style="background:var(--bg-elev-2);padding:12px;border-radius:10px;line-height:1.6">' +
       '<strong>Cushion date</strong> = ' + cushionWords() + ' back from the due date<br>' +
@@ -2331,7 +2595,7 @@
       '<p class="small dim">In Safari tap <strong>Share ⬆︎ → Add to Home Screen</strong>. ' +
       'It then opens full screen like a real app and works with no signal.</p></div>';
 
-    html += '<div class="card"><div class="card-title">Danger zone</div>' +
+    html += '<div class="card"><div class="card-title">Start over</div>' +
       '<button class="btn danger" data-act="reset">Erase all data</button></div>';
 
     html += '<p class="center tiny faint" style="padding:10px 0 20px">Bill Cushion · everything stays on your phone</p>';
@@ -3679,7 +3943,15 @@
     var hasTax = taxRate() > 0;
 
     var html = '<h2>How this works</h2>' +
-      '<div class="sheet-sub">The short version, in plain words.</div>';
+      '<div class="sheet-sub">The short version, in plain words.</div>' +
+      '<div class="card tight"><div class="card-title">Any number can explain itself</div>' +
+      '<p class="small">Wherever you see a small <strong>?</strong> next to a figure, tap it. ' +
+      'It says what the number means and shows the sum it came from, using your own ' +
+      'amounts — not an example.</p>' +
+      '<p class="small dim mt">The app opens in <strong>Simple</strong>, which keeps today\'s ' +
+      'questions on screen. <strong>More → How much do you want to see</strong> switches to ' +
+      'Advanced, which puts every running total, breakdown and chart back. Nothing is ever ' +
+      'taken away, only folded.</p></div>';
 
     html += '<div class="card tight"><div class="card-title">Logging is two taps</div>' +
       '<p class="small">Tap <strong>＋ Job</strong>, type what it paid, tap <strong>Log it</strong>. ' +
@@ -3727,9 +3999,10 @@
         (hasCut && hasTax ? ' and tax ' : ' ') +
         'build up as a running total on the <strong>Business</strong> tab. When you ' +
         'actually hand it over, record it there and the balance clears.</p>' +
-        (hasCut && p.mode === 'perJob'
-          ? '<p class="small dim mt">Some jobs are not his — switch off ' +
-            esc(partnerName()) + '\'s cut when logging that job.</p>'
+        (hasCut
+          ? '<p class="small dim mt">Some jobs are not his. Tap the chip on any job to change ' +
+            'that one, or use <strong>Paying ' + esc(partnerName()) + ' for this day</strong> ' +
+            'under the day\'s jobs to switch the whole day at once.</p>'
           : '') +
         '</div>';
     }
@@ -3837,6 +4110,18 @@
       case 'quick-complete':
         var plan = todayPlan();
         completeDay(iso, { amount: plan.remainingTotal });
+        break;
+
+      case 'explain': explainSheet(t.dataset.key); break;
+
+      case 'go-business': view = 'business'; render(); window.scrollTo({ top: 0 }); break;
+
+      case 'set-mode':
+        state.settings.mode = t.dataset.mode === 'advanced' ? 'advanced' : 'simple';
+        save(); render();
+        toast(isSimple()
+          ? '☀️ Simple view — just today\'s questions'
+          : '🔬 Advanced view — every figure on show');
         break;
 
       case 'toggle-chain':
@@ -3988,6 +4273,28 @@
         if (ex) expenseSheet(ex);
         break;
       }
+      // One switch for the whole day: some days are all his, some are all yours.
+      case 'toggle-day-cut': {
+        var dIso = t.dataset.date || iso;
+        var dayJobs = jobsOn(dIso);
+        if (!dayJobs.length) break;
+        var before = dayJobs.map(function (j) { return { j: j, was: jobHasCut(j) }; });
+        var turnOn = !dayJobs.every(jobHasCut);      // any not his -> make them all his
+        dayJobs.forEach(function (j) { j.partnerCut = turnOn; });
+        syncAutoSetAside(dIso);
+        save(); render();
+        if ($('.sheet')) daySheet(dIso);
+        lastUndo = { fn: function () {
+          before.forEach(function (x) { x.j.partnerCut = x.was; });
+          syncAutoSetAside(dIso); save(); render();
+        } };
+        toast(turnOn
+          ? '💰 Every job on ' + fmtDate(dIso) + ' owes ' + esc(partnerName()) + ' — ' +
+            money(partnerCutOn(dIso))
+          : '✅ Every job on ' + fmtDate(dIso) + ' is yours, nothing owed', 'Undo');
+        break;
+      }
+
       case 'toggle-job-cut': {
         var tj = null;
         state.jobs.forEach(function (x) { if (x.id === id) tj = x; });
