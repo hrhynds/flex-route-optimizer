@@ -156,6 +156,14 @@ the cushion is *how early to be ready*, and money set aside is money set aside.
   put it right: add a job or a cost, switch the whole day's partner share, correct a
   set-aside amount rather than deleting it, add more, or reopen it.
 
+The month summary leads with **Bills due in <month>** — every bill landing in the month
+you're looking at, whatever rhythm it keeps, added up. A weekly bill counts each time it
+lands, a monthly one follows its anchor day into months its current cycle hasn't reached
+yet, and cycles already paid come from the record. Tap the **?** for the itemised list.
+It sits above *still to set aside* and *already set aside*, which answer a different
+question: those cover the days shown on that calendar, and a bill's funding window can
+run past the end of a month.
+
 A day's bill money can come from that day's takings or from savings you already had.
 Only the first kind reduces what the day kept, so the two are listed apart and the
 second is named and explained rather than silently left out. Paging
