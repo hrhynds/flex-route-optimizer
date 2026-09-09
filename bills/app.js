@@ -22,7 +22,7 @@
 
   var STORE_KEY = 'billcushion.v1';
   var BACKUP_KEY = 'billcushion.lastgood';   // the state as of the last clean open
-  var APP_VERSION = '2026.09.09';            // bump when shipping; shown under More
+  var APP_VERSION = '2026.09.09b';            // bump when shipping; shown under More
   var MS_DAY = 86400000;
   var DOW_LONG = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
   var DOW_MID = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
@@ -598,6 +598,43 @@
       return { date: d, amount: sim ? sim.plannedTotal : 0 };
     }
     return null;
+  }
+
+  /**
+   * Every bill falling due inside one calendar month, however it recurs.
+   * Walks each bill's schedule forward from where it stands now and looks back
+   * through what has already been paid, so any month on the calendar can say
+   * what it actually costs — not just the cycle that happens to be running.
+   */
+  function billsDueIn(y, mo) {
+    var first = toISO(new Date(y, mo, 1));
+    var last = toISO(new Date(y, mo + 1, 0));
+    var out = [];
+    activeBills().forEach(function (b) {
+      if (!b.dueDate) return;
+
+      // cycles already settled are on the record
+      (b.paidHistory || []).forEach(function (h) {
+        if (h.due && diffDays(first, h.due) >= 0 && diffDays(h.due, last) >= 0) {
+          out.push({ bill: b, date: h.due, amount: h.amount, paid: true });
+        }
+      });
+
+      // and the ones still to come, following whatever rhythm it keeps
+      var d = b.dueDate, seen = {};
+      for (var i = 0; i < 60; i++) {
+        if (!d || seen[d]) break;
+        seen[d] = 1;
+        if (diffDays(d, last) < 0) break;            // past the end of the month
+        if (diffDays(first, d) >= 0) out.push({ bill: b, date: d, amount: b.amount, paid: false });
+        var nxt = advanceDue({ dueDate: d, recurrence: b.recurrence,
+                               anchorDay: b.anchorDay, scheduleDates: b.scheduleDates });
+        if (!nxt || nxt === d) break;
+        d = nxt;
+      }
+    });
+    out.sort(function (a, z) { return diffDays(z.date, a.date); });
+    return out;
   }
 
   /** Today's snapshot, used all over the UI. */
@@ -1457,6 +1494,26 @@
         total: ['Every working day', round2(list.reduce(function (a, x) { return a + x.perDay; }, 0))],
         foot: 'Work extra days and it falls. Miss days and it climbs. It always adds up ' +
           'to the same bills.'
+      };
+    },
+
+    monthbills: function () {
+      var cm = calMonth || { y: fromISO(todayISO()).getFullYear(), m: fromISO(todayISO()).getMonth() };
+      var list = billsDueIn(cm.y, cm.m);
+      return {
+        title: 'What is due in ' + MON_LONG[cm.m] + '?',
+        lead: list.length
+          ? 'Every bill that lands in this month, whatever its rhythm — added up so you ' +
+            'know what the month costs before it arrives.'
+          : 'Nothing falls due this month, so the daily amounts are all building toward ' +
+            'later months.',
+        rows: list.map(function (x) {
+          return [(x.bill.icon || '🧾') + ' ' + x.bill.name + ' — ' + fmtDate(x.date) +
+            (x.paid ? ' (paid)' : ''), x.amount];
+        }),
+        total: ['Due in ' + MON_LONG[cm.m], round2(list.reduce(function (a, x) { return a + x.amount; }, 0))],
+        foot: 'This is what the month is asked to pay. The daily figure covers it a few ' +
+          'days early, which is why the two do not match.'
       };
     },
 
@@ -2411,7 +2468,14 @@
       '<span><i style="background:var(--blue)"></i>today</span>' +
       '</div>';
 
+    var dueThisMonth = billsDueIn(calMonth.y, calMonth.m);
+    var dueTotal = round2(dueThisMonth.reduce(function (a, x) { return a + x.amount; }, 0));
     html += '<div class="sep"></div>' +
+      '<div class="list-row"><div>Bills due in ' + MON_LONG[calMonth.m] + why('monthbills') +
+      '<div class="lr-sub">' + (dueThisMonth.length
+        ? plural(dueThisMonth.length, 'bill') + ' landing this month'
+        : 'nothing falls due this month') + '</div></div>' +
+      '<div class="lr-amt">' + money(dueTotal) + '</div></div>' +
       '<div class="list-row"><div>Still to set aside this month</div><div class="lr-amt">' + money(monthRequired) + '</div></div>' +
       '<div class="list-row"><div>Already set aside this month</div><div class="lr-amt">' + money(monthActual) + '</div></div>' +
       '</div>';
