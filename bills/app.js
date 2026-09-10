@@ -22,7 +22,7 @@
 
   var STORE_KEY = 'billcushion.v1';
   var BACKUP_KEY = 'billcushion.lastgood';   // the state as of the last clean open
-  var APP_VERSION = '2026.09.09b';            // bump when shipping; shown under More
+  var APP_VERSION = '2026.09.10';            // bump when shipping; shown under More
   var MS_DAY = 86400000;
   var DOW_LONG = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
   var DOW_MID = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
@@ -1115,6 +1115,36 @@
   }
 
   /**
+   * Money with no bill attached to it.
+   *
+   * Of everything the work has made you, some has gone to bills and some of
+   * what is left is still spoken for by bills that are not funded yet. What
+   * survives both is genuinely yours — "free and clear". Money sitting in the
+   * bill pot beyond what any bill needs counts too: no bill is coming for it.
+   *
+   * It is a forward-looking figure, not a bank balance. It says what is left
+   * once every bill is paid for, whether or not you have already spent it.
+   */
+  function freeAndClear() {
+    var from = state.meta.created || todayISO();
+    var r = rangeMoney(from, todayISO());
+    var stillNeeded = round2(activeBills().reduce(function (a, b) {
+      return a + Math.max(0, b.amount - savedFor(b));
+    }, 0));
+    var kept = round2(r.earned - r.billsSetAside);
+    var buffer = bufferTotal();
+    return {
+      from: from,
+      earned: r.earned,
+      toBills: r.billsSetAside,
+      kept: kept,
+      buffer: buffer,
+      stillNeeded: stillNeeded,
+      amount: round2(kept + buffer - stillNeeded)
+    };
+  }
+
+  /**
    * Jobs you have logged before, most-repeated first. Logging the same detail
    * for the same money is the common case, so it should cost one tap.
    */
@@ -1497,6 +1527,25 @@
       };
     },
 
+    free: function () {
+      var f = freeAndClear();
+      var rows = [['Everything the work has made you', f.earned],
+                  ['Less what has gone to bills', -f.toBills]];
+      if (f.buffer > 0.004) rows.push(['Plus bill money no bill needs', f.buffer]);
+      if (f.stillNeeded > 0.004) rows.push(['Less what the bills still want', -f.stillNeeded]);
+      return {
+        title: 'What does \u201cfree and clear\u201d mean?',
+        lead: 'Money with no bill attached to it. Of everything the work has made you, ' +
+          'some has gone to bills and some of the rest is still spoken for. What survives ' +
+          'both is yours.',
+        rows: rows,
+        total: ['Free and clear', f.amount],
+        foot: 'This says what is left once every bill is paid for — it is not a bank ' +
+          'balance, so it does not know what you have already spent. Counted from ' +
+          fmtDate(f.from) + ', when you started.'
+      };
+    },
+
     monthbills: function () {
       var cm = calMonth || { y: fromISO(todayISO()).getFullYear(), m: fromISO(todayISO()).getMonth() };
       var list = billsDueIn(cm.y, cm.m);
@@ -1863,6 +1912,23 @@
           '<button class="btn" data-act="reopen-day">Reopen day</button></div>';
       }
       html += '</div></div>';
+    }
+
+    /* ---- what no bill has a claim on ---- */
+    if (datedBills().length) {
+      var fc = freeAndClear();
+      var clear = fc.amount > 0.004;
+      html += '<div class="card ' + (clear ? 'good-card' : '') + '">' +
+        '<div class="card-title">Free and clear' + why('free') +
+        '<span class="faint" style="text-transform:none;letter-spacing:0">' +
+        (clear ? 'no bill wants this' : 'not yet') + '</span></div>' +
+        '<div class="money" id="free-clear" style="font-size:1.6rem;font-weight:800;' +
+        'letter-spacing:-0.6px;margin-bottom:8px">' + money(Math.max(0, fc.amount)) + '</div>' +
+        '<div class="lr-sub">' + (clear
+          ? 'Every bill on your list is paid for out of what you have made. This much is ' +
+            'left over and nothing is coming for it.'
+          : 'Your bills still want ' + money(round2(-fc.amount)) + ' more than the work has ' +
+            'made so far. Earn past that and the rest lands here.') + '</div></div>';
     }
 
     /* ---- headline numbers ---- */
@@ -4120,6 +4186,14 @@
           : '') +
         '</div>';
     }
+
+    html += '<div class="card tight"><div class="card-title">Free and clear</div>' +
+      '<p class="small">The last card on the day is money <strong>no bill has a claim on</strong>. ' +
+      'It takes everything the work has made you, subtracts what has gone to bills and what ' +
+      'the bills still want, and what survives is genuinely yours.</p>' +
+      '<p class="small dim mt">Until your bills are covered it sits at zero and tells you how ' +
+      'much further there is to go. It is not a bank balance — it does not know what you have ' +
+      'already spent.</p></div>';
 
     html += '<div class="card tight"><div class="card-title">If anything ever goes missing</div>' +
       '<p class="small"><strong>More → Copy my setup code</strong>. Keep it in Notes. ' +

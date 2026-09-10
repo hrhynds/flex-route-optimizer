@@ -164,6 +164,24 @@ It sits above *still to set aside* and *already set aside*, which answer a diffe
 question: those cover the days shown on that calendar, and a bill's funding window can
 run past the end of a month.
 
+### Free and clear
+
+The day ends with the figure that answers "how much of this is actually mine?" — money
+**no bill has a claim on**:
+
+```
+everything the work has made you
+− what has already gone to bills
++ any bill money no bill needs
+− what the bills still want
+= free and clear
+```
+
+Until the bills are covered it sits at zero and says how much further there is to go,
+rather than showing a negative number. It is a forward-looking figure, not a bank
+balance: it says what is left once every bill is paid for, whether or not you have
+already spent it. Tap the **?** for the sum with your own numbers.
+
 A day's bill money can come from that day's takings or from savings you already had.
 Only the first kind reduces what the day kept, so the two are listed apart and the
 second is named and explained rather than silently left out. Paging
