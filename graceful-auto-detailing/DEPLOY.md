@@ -10,6 +10,14 @@ domain — the address Fly gives you works fine for a link sent by text.
 
 ---
 
+## No terminal? Start here instead
+
+**[SETUP-FROM-YOUR-PHONE.md](SETUP-FROM-YOUR-PHONE.md)** does all of this from
+web pages — GitHub runs the Fly command line for you and you press a button. It
+works on a phone. Come back here if you would rather drive it yourself.
+
+---
+
 ## The whole thing, in one command
 
 ```bash

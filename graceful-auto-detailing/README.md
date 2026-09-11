@@ -178,11 +178,13 @@ gate than an inbox.
 
 ## Deploying
 
-**One command:** `./scripts/deploy-fly.sh` creates the app on Fly, its disk and
-its secret, points it at its own address, deploys, and prints your setup code.
-It is safe to re-run. **[DEPLOY.md](DEPLOY.md)** covers what it needs first and
-what to do afterwards, plus `docker compose up -d` if you would rather own the
-box.
+**Without a terminal:** **[SETUP-FROM-YOUR-PHONE.md](SETUP-FROM-YOUR-PHONE.md)**
+— add a Fly token to GitHub and press a button. Works on a phone.
+
+**With one:** `./scripts/deploy-fly.sh` creates the app on Fly, its disk and its
+secret, points it at its own address, deploys, and prints your setup code. Safe
+to re-run. **[DEPLOY.md](DEPLOY.md)** covers the rest, plus `docker compose up -d`
+if you would rather own the box.
 
 Put it behind HTTPS. Two reasons, both hard requirements rather than advice:
 
