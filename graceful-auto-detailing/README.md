@@ -162,9 +162,13 @@ All optional except `APP_SECRET` in production.
 A `.env` file in this folder is read for convenience in local runs.
 
 ```bash
+npm run setup-code                                   # the one-time code, any time
 npm run owner -- you@example.com 'a long passphrase' 'Your Name'
 npm run reset-password -- 'a new long passphrase'    # ends every session
 ```
+
+The setup code is kept in the database until it is used, so a missed line in a
+log is not a dead end, and it is deleted the moment an owner exists.
 
 Password recovery is deliberately a command on the server rather than an email
 loop: for a one-person business, needing access to the machine is a stronger
@@ -174,9 +178,11 @@ gate than an inbox.
 
 ## Deploying
 
-**[DEPLOY.md](DEPLOY.md) walks through it step by step.** The short version is
-`fly launch --no-deploy`, create a volume, set `APP_SECRET`, `fly deploy` — or
-`docker compose up -d` on your own box, where Caddy handles the certificate.
+**One command:** `./scripts/deploy-fly.sh` creates the app on Fly, its disk and
+its secret, points it at its own address, deploys, and prints your setup code.
+It is safe to re-run. **[DEPLOY.md](DEPLOY.md)** covers what it needs first and
+what to do afterwards, plus `docker compose up -d` if you would rather own the
+box.
 
 Put it behind HTTPS. Two reasons, both hard requirements rather than advice:
 

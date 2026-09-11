@@ -1,124 +1,103 @@
-# Putting this online
+# Getting this online
 
 You need somewhere to run it, and that somewhere needs **HTTPS**. Not as good
-practice — as a hard requirement. Browsers refuse to give a page your location
-unless it arrived over a secure connection, so **"I'm on my way" cannot work
-over plain HTTP.** Everything below gets you a certificate without thinking
-about it.
+practice — as a hard requirement: browsers refuse to give a page your location
+unless it arrived securely, so **"I'm on my way" cannot work over plain HTTP.**
 
-The recommendation is **Fly.io**: a few dollars a month, a certificate and a
-domain included, and a real disk that survives restarts. The whole thing is
-three commands. If you would rather own the box, skip to
-[On your own server](#on-your-own-server) — it is the same container either way.
+The recommendation is **Fly.io**. A few dollars a month, a secure address
+included, and a real disk that survives restarts. You do not need your own
+domain — the address Fly gives you works fine for a link sent by text.
 
 ---
 
-## The quick version
+## The whole thing, in one command
 
 ```bash
 cd graceful-auto-detailing
-
-fly launch --no-deploy                       # pick a name; it reads fly.toml
-fly volumes create graceful_data --size 1    # the disk your data lives on
-fly secrets set APP_SECRET="$(openssl rand -base64 48)"
-fly deploy
+./scripts/deploy-fly.sh
 ```
 
-Then open `https://<your-app>.fly.dev/admin`, and read the setup code out of
-`fly logs`.
+It asks you to sign in, asks what to call the app, then creates everything,
+deploys, and prints your setup code. Roughly five minutes, most of it waiting.
 
-That is it. The rest of this page explains each step and what to do next.
+Safe to run again if anything goes wrong — it checks what already exists before
+creating anything, so you never have to start over.
 
----
+### What you need first
 
-## Step by step
-
-### 1. Install the Fly command line and sign in
+**The Fly command**, once:
 
 ```bash
+# macOS or Linux
 curl -L https://fly.io/install.sh | sh
-fly auth signup      # or: fly auth login
+
+# Windows (PowerShell)
+powershell -Command "iwr https://fly.io/install.ps1 -useb | iex"
 ```
 
-It asks for a card. A machine this size runs a few dollars a month.
+Close and reopen your terminal afterwards so it can find the command.
 
-### 2. Create the app
+**A Fly account.** The script opens the sign-up page if you do not have one. It
+asks for a card; a machine this size runs a few dollars a month.
 
-```bash
-cd graceful-auto-detailing
-fly launch --no-deploy
-```
+### What it does
 
-It will ask for a name — something like `graceful-auto-detailing`. Say **no**
-to a database and **no** to Redis; this app needs neither. `--no-deploy` is
-there because a couple of things have to exist before the first deploy.
+| | |
+|---|---|
+| 1 | Signs you in to Fly |
+| 2 | Creates the app under the name you pick — that becomes `https://yourname.fly.dev` |
+| 3 | Creates a 1 GB disk for your customers, jobs and photos |
+| 4 | Generates the secret that protects your sign-in |
+| 5 | Points the app at its own address, so texted links work |
+| 6 | Deploys |
+| 7 | Prints your setup code |
 
-### 3. Create the disk
+Step 5 is the one people get wrong by hand. Every link you text is built from
+that address, so if it is wrong every link is dead. The script writes it from
+the name you chose rather than leaving it for you to remember.
 
-```bash
-fly volumes create graceful_data --region ord --size 1
-```
+### Then
 
-This is where the database and every before-and-after photo live. One gigabyte
-is a lot of photos; you can grow it later with `fly volumes extend`.
-
-Use the same region you picked in step 2. `ord` is Chicago, the closest Fly
-region to Michigan.
-
-### 4. Set the secret
-
-```bash
-fly secrets set APP_SECRET="$(openssl rand -base64 48)"
-```
-
-This one value protects every sign-in session. You never need to see it or
-remember it. Do not reuse it anywhere else.
-
-### 5. Tell it its own address
-
-Open `fly.toml` and set `PUBLIC_BASE_URL` to the address customers will
-actually reach:
-
-```toml
-PUBLIC_BASE_URL = "https://graceful-auto-detailing.fly.dev"
-```
-
-**This matters more than it looks.** Every link you text a customer is built
-from it. Point it at the wrong place and every link is dead. The app refuses to
-start if you leave it pointing at localhost.
-
-### 6. Deploy
-
-```bash
-fly deploy
-```
-
-A minute or two later it is live.
-
-### 7. Sign in for the first time
-
-```bash
-fly logs
-```
-
-Look for the box that says **No owner account yet** and copy the setup code.
-Open `https://<your-app>.fly.dev/admin`, enter the code, and pick your email
+Open `https://yourname.fly.dev/admin`, enter the setup code, and pick your email
 and password. That account is the only way into the dashboard, ever, and the
-setup code stops working the moment you use it.
+code stops working the moment you use it.
+
+**Lost the code?** It is kept until you use it:
+
+```bash
+fly ssh console -a yourname -C "npm run setup-code"
+```
+
+### First things to do inside
+
+1. **Setup → Business details** — your phone number, and check the timezone.
+2. **Setup → Services and Add-ons** — your real prices. They ship with yours
+   already in (trim $20, spray wax $10, clay bar $60, pet hair $40, headlights
+   from $80), so mostly you are just confirming them.
+3. **Customers → +** — add someone real and book them in.
+4. On the job, press **Where to → Use where I am now** when you are standing at
+   their address, and every future job there gets a real ETA.
 
 ---
 
-## Your own domain
+## Your own domain — optional, later
 
-A customer tapping a link from your website should not land on `fly.dev`.
+You do not need this. A link sent by text works the same whether it says
+`fly.dev` or your own name, and nobody types it in. Do it when you want the
+link to look like you, not before.
+
+Your website stays exactly where it is — this only adds a subdomain beside it.
 
 ```bash
-fly certs add app.gracefulautodetail.com
-fly certs show app.gracefulautodetail.com     # shows the DNS records to add
+fly certs add app.gracefulautodetail.com -a yourname
+fly certs show app.gracefulautodetail.com -a yourname   # prints the DNS records to add
 ```
 
-Add the records it prints wherever gracefulautodetail.com's DNS lives. Once the
-certificate goes green, change `PUBLIC_BASE_URL` in `fly.toml` to
+Add those records wherever gracefulautodetail.com's DNS lives — your site is on
+Netlify, so that is Netlify's DNS panel unless you moved it. Nothing about the
+website changes; you are adding one name beside it.
+
+Once the certificate goes green, change `PUBLIC_BASE_URL` in `fly.toml` to
 `https://app.gracefulautodetail.com` and run `fly deploy` again.
 
 Old links issued under the `fly.dev` address stop working at that point, which
@@ -154,8 +133,8 @@ disk. Fly keeps its own volume snapshots, but a backup you hold yourself is the
 one that is definitely there.
 
 ```bash
-fly ssh console -C "npm run backup"                  # make one
-fly ssh sftp get /data/backups/graceful-....tar.gz   # bring it home
+fly ssh console -a yourname -C "npm run backup"       # make one
+fly ssh sftp get /data/backups/graceful-....tar.gz    # bring it home
 ```
 
 That file is a complete copy: the database plus every photo. Keep it somewhere

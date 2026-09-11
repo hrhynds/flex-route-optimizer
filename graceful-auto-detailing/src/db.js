@@ -414,9 +414,16 @@ export function setSetting(key, value) {
   );
 }
 
+/* The setup code lives in this table but is not a setting anyone should see,
+   so it never rides along in a payload. */
+const PRIVATE_SETTINGS = new Set(['setup_code']);
+
 export function allSettings() {
   const out = { ...SETTING_DEFAULTS };
-  for (const row of q.all('SELECT key, value FROM settings')) out[row.key] = row.value;
+  for (const row of q.all('SELECT key, value FROM settings')) {
+    if (PRIVATE_SETTINGS.has(row.key)) continue;
+    out[row.key] = row.value;
+  }
   return out;
 }
 

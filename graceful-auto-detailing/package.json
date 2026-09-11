@@ -15,7 +15,8 @@
     "test": "node --disable-warning=ExperimentalWarning --test 'test/*.test.js'",
     "reset-password": "node --disable-warning=ExperimentalWarning scripts/reset-password.js",
     "backup": "node --disable-warning=ExperimentalWarning scripts/backup.js",
-    "restore": "node --disable-warning=ExperimentalWarning scripts/restore.js"
+    "restore": "node --disable-warning=ExperimentalWarning scripts/restore.js",
+    "setup-code": "node --disable-warning=ExperimentalWarning scripts/setup-code.js"
   },
   "dependencies": {}
 }

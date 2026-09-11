@@ -1,5 +1,5 @@
 import config from './config.js';
-import { q, audit } from './db.js';
+import { q, audit, getSetting, setSetting } from './db.js';
 import {
   hashPassword, verifyPassword, newToken, hashToken, safeEqual,
   parseCookies, serializeCookie, isSecureRequest, clientIp, sameOrigin,
@@ -72,23 +72,32 @@ export async function changePassword(ownerId, currentPassword, nextPassword) {
 }
 
 /* ---------- one-time setup code ----------
-   Printed to the server console when the database has no owner yet, so the
-   very first account cannot be claimed by whoever finds the URL first. */
+   Stops the very first account being claimed by whoever finds the URL first.
 
-let setupCode = null;
+   It is kept in the database rather than in memory so that restarting the
+   server does not invalidate it and a missed line in a log is not a dead end:
+   `npm run setup-code` can read it back at any time. It exists only while
+   there is no owner, and is deleted the moment one is created, so after
+   setup there is nothing left to find. */
 
 export function ensureSetupCode() {
-  if (ownerCount() > 0) { setupCode = null; return null; }
-  if (!setupCode) setupCode = newToken().slice(0, 12).toUpperCase();
-  return setupCode;
+  if (ownerCount() > 0) { clearSetupCode(); return null; }
+  const stored = getSetting('setup_code');
+  if (stored) return stored;
+  const code = newToken().slice(0, 12).toUpperCase();
+  setSetting('setup_code', code);
+  return code;
 }
 
-export function clearSetupCode() { setupCode = null; }
+export function clearSetupCode() {
+  q.run('DELETE FROM settings WHERE key = ?', 'setup_code');
+}
 
 export function checkSetupCode(given) {
-  if (!setupCode) throw forbidden('Setup is already complete.');
-  if (!safeEqual(String(given || '').trim().toUpperCase(), setupCode)) {
-    throw forbidden('That setup code is not right. It is printed in the server log.');
+  const code = ownerCount() === 0 ? getSetting('setup_code') : null;
+  if (!code) throw forbidden('Setup is already complete.');
+  if (!safeEqual(String(given || '').trim().toUpperCase(), code)) {
+    throw forbidden('That setup code is not right. Run `npm run setup-code` to see it.');
   }
   return true;
 }
