@@ -235,6 +235,88 @@ export function initials(name) {
   return (parts[0][0] + (parts.length > 1 ? parts[parts.length - 1][0] : '')).toUpperCase();
 }
 
+
+/* ---------- icons ----------
+   Drawn as inline SVG rather than emoji: the brand is sharp, monochrome and
+   automotive, and full-colour emoji sitting in the chrome of the app fights
+   that. These take the surrounding colour, so they work anywhere.
+   Built with createElementNS, never from a markup string. */
+
+const SVG_NS = 'http://www.w3.org/2000/svg';
+
+const ICON_PATHS = {
+  today:     ['M12 3v2M12 19v2M3 12h2M19 12h2M5.6 5.6l1.4 1.4M17 17l1.4 1.4M18.4 5.6L17 7M7 17l-1.4 1.4', 'M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8z'],
+  schedule:  ['M4 6h16v14H4zM4 10h16M8 3v4M16 3v4', 'M8 14h3'],
+  customers: ['M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8z', 'M4 20c0-3.3 3.6-6 8-6s8 2.7 8 6'],
+  money:     ['M3 7h18v10H3z', 'M12 10.5a1.5 1.5 0 1 0 0 3 1.5 1.5 0 0 0 0-3z', 'M6 7v10M18 7v10'],
+  setup:     ['M4 7h10M18 7h2M4 17h4M12 17h8', 'M16 4.5a2.5 2.5 0 1 0 0 5 2.5 2.5 0 0 0 0-5z', 'M10 14.5a2.5 2.5 0 1 0 0 5 2.5 2.5 0 0 0 0-5z'],
+  phone:     ['M6 3h3l2 5-2.5 1.5a12 12 0 0 0 6 6L16 13l5 2v3a2 2 0 0 1-2.2 2A17 17 0 0 1 4 5.2 2 2 0 0 1 6 3z'],
+  message:   ['M4 5h16v11H9l-5 4z'],
+  compass:   ['M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18z', 'M15.5 8.5 13 13l-4.5 2.5L11 11z'],
+  link:      ['M9.5 14.5 14.5 9.5', 'M11 7.5 13 5.5a3.5 3.5 0 1 1 5 5l-2 2', 'M13 16.5l-2 2a3.5 3.5 0 1 1-5-5l2-2'],
+  pin:       ['M12 21s7-6.2 7-11a7 7 0 1 0-14 0c0 4.8 7 11 7 11z', 'M12 8a2.5 2.5 0 1 0 0 5 2.5 2.5 0 0 0 0-5z'],
+  receipt:   ['M6 3h12v18l-2.5-1.6L13 21l-2.5-1.6L8 21l-2-1.4z', 'M9 8h6M9 12h6'],
+  star:      ['M12 3.5l2.6 5.4 5.9.8-4.3 4.1 1.1 5.9-5.3-2.9-5.3 2.9 1.1-5.9L3.5 9.7l5.9-.8z'],
+  sparkle:   ['M12 3.5 13.7 9l5.5 1.7-5.5 1.7L12 18l-1.7-5.6L4.8 10.7 10.3 9z'],
+  camera:    ['M3 7h4l1.5-2h7L17 7h4v12H3z', 'M12 10a3.5 3.5 0 1 0 0 7 3.5 3.5 0 0 0 0-7z'],
+  search:    ['M11 4a7 7 0 1 0 0 14 7 7 0 0 0 0-14z', 'M16.2 16.2 21 21'],
+  clock:     ['M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18z', 'M12 7.5V12l3 2'],
+  calendar:  ['M4 6h16v14H4zM4 10h16M8 3v4M16 3v4'],
+  car:       ['M4 15h16M5.5 15l1.6-5.2A2 2 0 0 1 9 8.4h6a2 2 0 0 1 1.9 1.4L18.5 15', 'M4 15v3h3v-3M17 15v3h3v-3'],
+  list:      ['M5 7h14M5 12h14M5 17h9'],
+  send:      ['M4 12 20 5l-6 15-2.6-6.4z'],
+  history:   ['M12 3a9 9 0 1 1-8.5 6', 'M3 4v5h5', 'M12 8v4.5l3 1.8'],
+  tag:       ['M4 4h7.5L20 12.5 12.5 20 4 11.5z', 'M8 8h.01'],
+  shield:    ['M12 3 20 6v6c0 5-8 9-8 9s-8-4-8-9V6z'],
+  close:     ['M6 6l12 12M18 6L6 18'],
+  back:      ['M14.5 5 8 12l6.5 7'],
+  chevron:   ['M9.5 5 16 12l-6.5 7'],
+  more:      ['M6 12h.01M12 12h.01M18 12h.01'],
+  edit:      ['M4 20h4L19 9a2.1 2.1 0 0 0-3-3L5 17z', 'M14.5 6.5 17.5 9.5'],
+};
+
+export function icon(name, { size = 22, stroke = 1.7, className = '', filled = false } = {}) {
+  const paths = ICON_PATHS[name] || ICON_PATHS.sparkle;
+  const svg = document.createElementNS(SVG_NS, 'svg');
+  svg.setAttribute('viewBox', '0 0 24 24');
+  svg.setAttribute('width', String(size));
+  svg.setAttribute('height', String(size));
+  svg.setAttribute('fill', filled ? 'currentColor' : 'none');
+  svg.setAttribute('stroke', 'currentColor');
+  svg.setAttribute('stroke-width', String(stroke));
+  svg.setAttribute('stroke-linecap', 'round');
+  svg.setAttribute('stroke-linejoin', 'round');
+  svg.setAttribute('aria-hidden', 'true');
+  svg.setAttribute('focusable', 'false');
+  if (className) svg.setAttribute('class', className);
+  for (const d of paths) {
+    const path = document.createElementNS(SVG_NS, 'path');
+    path.setAttribute('d', d);
+    svg.append(path);
+  }
+  return svg;
+}
+
+/* Five stars, lit up to the rating. Used on both sides, so the owner sees
+   exactly what the customer tapped. */
+export function stars(rating, { size = 20, onPick = null } = {}) {
+  const row = h('div', { class: `stars${onPick ? ' stars--pickable' : ''}` });
+  for (let n = 1; n <= 5; n += 1) {
+    const lit = n <= rating;
+    const glyph = icon('star', { size, filled: lit, stroke: lit ? 1 : 1.5 });
+    if (onPick) {
+      row.append(h('button', {
+        class: lit ? 'lit' : '',
+        'aria-label': `${n} star${n > 1 ? 's' : ''}`,
+        onClick: () => onPick(n),
+      }, glyph));
+    } else {
+      row.append(h('span', { class: lit ? 'lit' : '' }, glyph));
+    }
+  }
+  return row;
+}
+
 /* ---------- toast ---------- */
 
 let toastEl = null;
@@ -350,9 +432,9 @@ export function moneyLine(label, value, { total = false, muted = false } = {}) {
   );
 }
 
-export function empty(emoji, message, action) {
+export function empty(iconName, message, action) {
   return h('div', { class: 'empty' },
-    h('span', { class: 'emoji', text: emoji }),
+    h('div', { class: 'empty-icon' }, icon(iconName, { size: 34, stroke: 1.4 })),
     h('p', { text: message }),
     action ? h('div', { style: { marginTop: '16px' } }, action) : null
   );

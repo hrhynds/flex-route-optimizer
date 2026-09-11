@@ -1,14 +1,32 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Graceful Auto Detailing">
   <defs>
-    <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0%" stop-color="#37c2b4"/>
-      <stop offset="100%" stop-color="#1f9d92"/>
+    <linearGradient id="chrome" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#ffffff"/>
+      <stop offset="26%" stop-color="#d4d8df"/>
+      <stop offset="52%" stop-color="#9ca2ae"/>
+      <stop offset="74%" stop-color="#c8cdd6"/>
+      <stop offset="100%" stop-color="#f2f4f7"/>
+    </linearGradient>
+    <linearGradient id="blue" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#5aaeff"/>
+      <stop offset="55%" stop-color="#2b8af5"/>
+      <stop offset="100%" stop-color="#0d4fa0"/>
     </linearGradient>
   </defs>
-  <rect width="64" height="64" rx="15" fill="url(#g)"/>
-  <path d="M14 39c0-7 5-13 11-16 4-2 9-3 13-2 3 .6 5 2.4 5 5 0 4-4 6-9 7-6 1.2-11 3-14 6z"
-        fill="#04201e" opacity=".82"/>
-  <path d="M16 44c6-4 13-6 20-6 4 0 8 .6 11 2" stroke="#04201e" stroke-width="3.4"
-        stroke-linecap="round" fill="none" opacity=".55"/>
-  <circle cx="43" cy="22" r="3.4" fill="#eafffb" opacity=".9"/>
+
+  <rect width="64" height="64" rx="6" fill="#000000"/>
+
+  <!-- the shield the badge is built on -->
+  <path d="M32 6 54 13.6v20.8C54 45 44 52.6 32 57.5 20 52.6 10 45 10 34.4V13.6z"
+        fill="none" stroke="url(#chrome)" stroke-width="2.2" opacity=".55"/>
+  <path d="M32 10.5 49.8 16.7v17.4c0 8.3-7.8 14.6-17.8 18.8-10-4.2-17.8-10.5-17.8-18.8V16.7z"
+        fill="none" stroke="#2b8af5" stroke-width="1.1" opacity=".6"/>
+
+  <!-- G -->
+  <path d="M30.6 20.4c3.9 0 7.3 1.8 9.4 4.7l-4 2.9a6.9 6.9 0 0 0-5.4-2.6 7 7 0 1 0 0 14 6.9 6.9 0 0 0 6.3-4h-6.1v-4.6h11.5v2.3c0 6.7-5.2 11.6-11.7 11.6a11.7 11.7 0 0 1 0-23.4z"
+        fill="url(#chrome)"/>
+
+  <!-- A: a solid blue wedge with its counter cut out, as on the badge -->
+  <path fill-rule="evenodd" clip-rule="evenodd" fill="url(#blue)"
+        d="M44.2 20.4h4.4L57 44.2h-5.1l-1.5-4.6h-8.6l-1.5 4.6h-5.1zM46.4 27.9l-2.5 7.5h5z"/>
 </svg>

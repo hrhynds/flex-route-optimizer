@@ -6,39 +6,52 @@
 }
 
 .landing-mark {
-  width: 64px; height: 64px; border-radius: 19px; margin: 0 auto 22px;
-  background: linear-gradient(140deg, var(--accent) 0%, var(--accent-deep) 100%);
-  display: grid; place-items: center;
-  color: #04201e; font-weight: 800; font-size: 1.4rem; letter-spacing: -0.03em;
-  box-shadow: var(--shadow);
+  width: min(230px, 62vw); height: auto; margin: 0 auto 10px;
+  display: block; object-fit: contain;
+}
+
+.landing-tagline {
+  font-family: var(--font-head);
+  font-size: 0.72rem; font-weight: 700; color: var(--blue-light);
+  text-transform: uppercase; letter-spacing: 0.24em;
 }
 
 .landing h1 {
-  font-size: 1.72rem; font-weight: 740; letter-spacing: -0.04em; line-height: 1.15;
+  font-size: 2.3rem; line-height: 1; margin-top: 18px;
 }
 
 .landing-lead {
-  color: var(--text-dim); font-size: 1rem; line-height: 1.62; margin-top: 14px;
+  color: var(--text-dim); font-size: 0.98rem; line-height: 1.65; margin-top: 14px; font-weight: 500;
 }
 
 .landing-points {
   list-style: none; text-align: left; margin-top: 30px;
   border: 1px solid var(--line); border-radius: var(--radius);
-  background: var(--surface); overflow: hidden;
+  background: linear-gradient(160deg, rgba(255,255,255,0.02), rgba(43,138,245,0.03)), var(--surface);
+  overflow: hidden;
 }
 .landing-points li {
   display: flex; gap: 13px; align-items: flex-start;
-  padding: 15px 17px; font-size: 0.9rem; line-height: 1.55;
+  padding: 16px 17px; font-size: 0.88rem; line-height: 1.55;
   border-bottom: 1px solid var(--line-soft);
+  color: var(--text-dim);
 }
 .landing-points li:last-child { border-bottom: none; }
-.landing-points span { font-size: 1.1rem; flex: none; line-height: 1.35; }
+.landing-points li > svg { flex: none; color: var(--blue-light); margin-top: 3px; }
+.landing-points li b {
+  display: block;
+  font-family: var(--font-head); font-weight: 700; color: var(--chrome);
+  text-transform: uppercase; letter-spacing: 0.05em; font-size: 1.05rem;
+  margin-bottom: 3px;
+}
 
 .landing-lost { margin-top: 26px; font-size: 0.87rem; color: var(--text-faint); line-height: 1.6; }
 
 .landing-owner {
   display: inline-block; margin-top: 34px;
-  font-size: 0.82rem; font-weight: 600; color: var(--text-faint);
-  padding: 10px 16px; border-radius: 999px; border: 1px solid var(--line-soft);
+  font-family: var(--font-head);
+  font-size: 0.78rem; font-weight: 700; color: var(--text-faint);
+  text-transform: uppercase; letter-spacing: 0.16em;
+  padding: 11px 18px; border-radius: var(--radius-xs); border: 1px solid var(--line-soft);
 }
 .landing-owner:hover { color: var(--text-dim); text-decoration: none; border-color: var(--line); }

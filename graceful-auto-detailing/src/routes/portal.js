@@ -69,6 +69,7 @@ function buildPortalPayload(appointment, link, token) {
   return {
     business: {
       name: settings.business_name,
+      tagline: settings.business_tagline,
       phone: settings.business_phone,
       email: settings.business_email,
       payment_instructions: settings.payment_instructions,

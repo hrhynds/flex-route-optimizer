@@ -2,7 +2,7 @@ import {
   h, mount, api, ApiError, money, price, toast, sheet, confirmSheet,
   field, switchRow, moneyLine, empty, moneyInput, localInputToMs, msToLocalInput,
   fmtTime, fmtDate, fmtDay, fmtCountdown, fmtRelative, fmtDistance, timeParts, fmtDuration,
-  initials, setTimezone, parseCoordinates,
+  initials, setTimezone, parseCoordinates, icon, stars,
 } from '../shared/ui.js';
 
 const app = document.getElementById('app');
@@ -49,7 +49,7 @@ function clearOnEdit(form, errorBox) {
 function gateShell(...children) {
   tabbar.hidden = true;
   mount(app, h('div', { class: 'gate' },
-    h('div', { class: 'gate-mark', text: 'GA' }),
+    h('img', { class: 'gate-mark', src: '/shared/logo.webp', alt: 'Graceful Auto Detailing', width: 132, height: 132 }),
     ...children
   ));
 }
@@ -145,11 +145,11 @@ function renderSetup() {
    ========================================================================== */
 
 const TABS = [
-  { id: 'today', label: 'Today', icon: '☀️' },
-  { id: 'schedule', label: 'Schedule', icon: '🗓️' },
-  { id: 'customers', label: 'Customers', icon: '👤' },
-  { id: 'money', label: 'Money', icon: '💵' },
-  { id: 'setup', label: 'Setup', icon: '⚙️' },
+  { id: 'today', label: 'Today', icon: 'today' },
+  { id: 'schedule', label: 'Schedule', icon: 'schedule' },
+  { id: 'customers', label: 'Customers', icon: 'customers' },
+  { id: 'money', label: 'Money', icon: 'money' },
+  { id: 'setup', label: 'Setup', icon: 'setup' },
 ];
 
 async function startApp() {
@@ -174,7 +174,7 @@ function renderTabbar(badges = {}) {
       href: `#/${tab.id}`,
       'aria-current': currentRoute().view === tab.id ? 'page' : null,
     },
-      h('span', { class: 'ti', text: tab.icon }),
+      h('span', { class: 'ti' }, icon(tab.icon, { size: 21 })),
       badges[tab.id] ? h('span', { class: 'badge', text: String(badges[tab.id]) }) : null,
       tab.label
     )
@@ -248,7 +248,7 @@ async function route() {
 
 function header(title, subtitle, ...actions) {
   return h('div', { class: 'appbar' },
-    h('div', { class: 'brandmark', text: 'GA' }),
+    h('img', { class: 'brandmark', src: '/shared/icon.svg', alt: '', width: 38, height: 38 }),
     h('div', { class: 'grow' },
       h('h1', { text: title }),
       subtitle ? h('div', { class: 'sub', text: subtitle }) : null
@@ -259,7 +259,7 @@ function header(title, subtitle, ...actions) {
 
 function backHeader(title, href, ...actions) {
   return h('div', { class: 'appbar' },
-    h('a', { class: 'icon-btn', href, 'aria-label': 'Back', text: '‹' }),
+    h('a', { class: 'icon-btn', href, 'aria-label': 'Back' }, icon('back', { size: 20 })),
     h('div', { class: 'grow' }, h('h1', { text: title })),
     ...actions
   );
@@ -434,14 +434,14 @@ async function renderToday() {
             h('div', { style: { fontWeight: '650' }, text: `${data.stats.unsent_messages} ${data.stats.unsent_messages === 1 ? 'text is' : 'texts are'} ready to send` }),
             h('div', { class: 'small muted', text: 'No SMS provider is connected, so these are waiting for you.' })
           ),
-          h('span', { class: 'chev', text: '›' })
+          h('span', { class: 'chev' }, icon('chevron', { size: 17 }))
         )
       : null,
 
     h('div', { class: 'section-title', text: 'Today' }),
     data.today.length
       ? h('div', {}, ...data.today.map(jobCard))
-      : h('div', { class: 'card' }, empty('🌤️', 'Nothing booked today.',
+      : h('div', { class: 'card' }, empty('clock', 'Nothing booked today.',
           h('a', { class: 'btn btn--primary', href: '#/schedule', text: 'Book a job' })))
   );
 
@@ -552,7 +552,7 @@ async function renderAppointment(idRaw) {
 
   mount(app,
     backHeader(a.customer.name, '#/today',
-      h('button', { class: 'icon-btn', 'aria-label': 'More', text: '⋯', onClick: () => appointmentMenu(a, reload) })
+      h('button', { class: 'icon-btn', 'aria-label': 'More', onClick: () => appointmentMenu(a, reload) }, icon('more', { size: 20, stroke: 2.6 }))
     ),
 
     h('div', { class: 'detail-head' },
@@ -875,14 +875,13 @@ function contactCard(a) {
       )
     ),
     h('div', { class: 'row', style: { gap: '8px' } },
-      a.customer.phone ? h('a', { class: 'btn btn--sm', href: `tel:${a.customer.phone}`, text: '📞 Call' }) : null,
-      a.customer.phone ? h('a', { class: 'btn btn--sm', href: `sms:${a.customer.phone}`, text: '💬 Text' }) : null,
+      a.customer.phone ? h('a', { class: 'btn btn--sm', href: `tel:${a.customer.phone}` }, icon('phone', { size: 17 }), 'Call') : null,
+      a.customer.phone ? h('a', { class: 'btn btn--sm', href: `sms:${a.customer.phone}` }, icon('message', { size: 17 }), 'Text') : null,
       a.address ? h('a', {
         class: 'btn btn--sm',
         href: `https://maps.google.com/?q=${encodeURIComponent(a.address)}`,
         target: '_blank', rel: 'noopener noreferrer',
-        text: '🧭 Directions',
-      }) : null,
+      }, icon('compass', { size: 17 }), 'Directions') : null,
       h('a', { class: 'btn btn--sm btn--ghost', href: `#/customer/${a.customer.id}`, text: 'Profile' })
     )
   );
@@ -913,12 +912,12 @@ function addonsCard(a, available, reload) {
         money(line.price_cents)
       ),
       a.addons_locked ? null : h('button', {
-        class: 'btn btn--quiet', text: '✕', 'aria-label': `Remove ${line.name}`,
+        class: 'btn btn--quiet', 'aria-label': `Remove ${line.name}`,
         onClick: async () => {
           await api.del(`/api/admin/appointments/${a.id}/addons/${line.id}`);
           reload();
         },
-      })
+      }, icon('close', { size: 17 }))
     )),
 
     moneyLine('Subtotal', money(a.totals.subtotal_cents)),
@@ -1404,7 +1403,7 @@ async function renderSchedule() {
           ),
           ...jobs.map((job) => jobCard(job))
         )))
-      : h('div', { class: 'card' }, empty('🗓️', 'Nothing on the books.',
+      : h('div', { class: 'card' }, empty('calendar', 'Nothing on the books.',
           h('button', { class: 'btn btn--primary', text: 'Book a job', onClick: () => newAppointment() }))),
 
     h('div', { class: 'section-title', text: 'History' }),
@@ -1413,7 +1412,7 @@ async function renderSchedule() {
         h('div', { class: 'row-title', text: 'Past jobs and invoices' }),
         h('div', { class: 'row-sub', text: 'Everything finished, cancelled or paid' })
       ),
-      h('span', { class: 'chev', text: '›' })
+      h('span', { class: 'chev' }, icon('chevron', { size: 17 }))
     )
   );
 }
@@ -1542,10 +1541,10 @@ async function renderCustomers() {
                 c.appointment_count ? `${c.appointment_count} job${c.appointment_count > 1 ? 's' : ''}` : null,
               ].filter(Boolean).join(' · ') })
             ),
-            h('span', { class: 'chev', text: '›' })
+            h('span', { class: 'chev' }, icon('chevron', { size: 17 }))
           )
         ))
-      : h('div', { class: 'card' }, empty('🔍', term ? 'Nobody matches that.' : 'No customers yet.')));
+      : h('div', { class: 'card' }, empty('search', term ? 'Nobody matches that.' : 'No customers yet.')));
   };
 
   let debounce;
@@ -1558,7 +1557,7 @@ async function renderCustomers() {
     header('Customers', null,
       h('button', { class: 'icon-btn', 'aria-label': 'Add a customer', text: '+', onClick: () => newCustomer() })
     ),
-    h('div', { class: 'search-bar' }, h('span', { class: 'search-icon', text: '🔍' }), search),
+    h('div', { class: 'search-bar' }, h('span', { class: 'search-icon' }, icon('search', { size: 18 })), search),
     list
   );
   await load();
@@ -1623,7 +1622,7 @@ async function renderCustomerDetail(idRaw) {
 
   mount(app,
     backHeader(customer.name, '#/customers',
-      h('button', { class: 'icon-btn', 'aria-label': 'Edit', text: '✎', onClick: () => editCustomer(customer, reload) })
+      h('button', { class: 'icon-btn', 'aria-label': 'Edit', onClick: () => editCustomer(customer, reload) }, icon('edit', { size: 19 }))
     ),
 
     h('div', { class: 'card card--flush' },
@@ -1636,8 +1635,8 @@ async function renderCustomerDetail(idRaw) {
         customer.sms_consent ? null : h('span', { class: 'pill pill--bad', text: 'no texts' })
       ),
       h('div', { class: 'row', style: { gap: '8px' } },
-        customer.phone ? h('a', { class: 'btn btn--sm', href: `tel:${customer.phone}`, text: '📞 Call' }) : null,
-        customer.phone ? h('a', { class: 'btn btn--sm', href: `sms:${customer.phone}`, text: '💬 Text' }) : null,
+        customer.phone ? h('a', { class: 'btn btn--sm', href: `tel:${customer.phone}` }, icon('phone', { size: 17 }), 'Call') : null,
+        customer.phone ? h('a', { class: 'btn btn--sm', href: `sms:${customer.phone}` }, icon('message', { size: 17 }), 'Text') : null,
         h('button', { class: 'btn btn--sm btn--primary', text: '+ Book', onClick: () => newAppointment(id) })
       )
     ),
@@ -1653,7 +1652,7 @@ async function renderCustomerDetail(idRaw) {
               h('div', { class: 'row-title', text: vehicleLabel(v) }),
               v.plate ? h('div', { class: 'row-sub', text: v.plate }) : null
             ),
-            h('span', { class: 'chev', text: '›' })
+            h('span', { class: 'chev' }, icon('chevron', { size: 17 }))
           )))
         : h('p', { class: 'small faint', text: 'No vehicles saved yet.' })
     ),
@@ -1666,7 +1665,7 @@ async function renderCustomerDetail(idRaw) {
     h('div', { class: 'section-title', text: 'Their jobs' }),
     customer.appointments.length
       ? h('div', {}, ...customer.appointments.map((job) => jobCard(job, { showDay: true })))
-      : h('div', { class: 'card' }, empty('🧽', 'No jobs yet.'))
+      : h('div', { class: 'card' }, empty('car', 'No jobs yet.'))
   );
 }
 
@@ -1799,7 +1798,7 @@ async function renderMoney() {
       h('div', { class: 'card card--flush' }, ...paid.slice(0, 30).map(invoiceRow))
     ) : null,
 
-    invoices.length ? null : h('div', { class: 'card' }, empty('💵', 'No invoices yet. Build one from a finished job.'))
+    invoices.length ? null : h('div', { class: 'card' }, empty('receipt', 'No invoices yet. Build one from a finished job.'))
   );
 }
 
@@ -1839,13 +1838,13 @@ async function renderInvoiceDetail(idRaw) {
             ),
             h('div', { class: 'row-end' }, h('div', { class: 'row-amount', text: money(p.amount_cents) })),
             h('button', {
-              class: 'btn btn--quiet', text: '✕', 'aria-label': 'Remove this payment',
+              class: 'btn btn--quiet', 'aria-label': 'Remove this payment',
               onClick: async () => {
                 if (!(await confirmSheet({ title: 'Remove this payment?', confirmLabel: 'Remove', danger: true }))) return;
                 await api.del(`/api/admin/payments/${p.id}`);
                 reload();
               },
-            })
+            }, icon('close', { size: 17 }))
           )))
         : h('p', { class: 'small faint', text: 'Nothing recorded yet.' }),
 
@@ -1922,7 +1921,7 @@ async function renderMessages() {
             h('div', { class: 'small faint', style: { marginTop: '4px' }, text: fmtRelative(m.created_at) })
           )
         )))
-      : h('div', { class: 'card' }, empty('💬', 'No texts yet.'))
+      : h('div', { class: 'card' }, empty('message', 'No texts yet.'))
   );
 }
 
@@ -1932,25 +1931,25 @@ async function renderMessages() {
 
 async function renderSetupHome() {
   const links = [
-    ['services', '🧽', 'Services and prices', 'What you offer and what it costs'],
-    ['addons', '✨', 'Add-ons', 'The extras a customer can pick themselves'],
-    ['templates', '💬', 'Text templates', 'The exact words that go out'],
-    ['business', '🏷️', 'Business details', 'Name, phone, timezone, tax, tracking window'],
-    ['reviews', '⭐', 'Reviews', 'What customers said, and what to publish'],
-    ['messages', '📤', 'All texts', 'Everything sent or waiting'],
-    ['activity', '📜', 'Activity log', 'Every change, with a timestamp'],
+    ['services', 'car', 'Services and prices', 'What you offer and what it costs'],
+    ['addons', 'sparkle', 'Add-ons', 'The extras a customer can pick themselves'],
+    ['templates', 'message', 'Text templates', 'The exact words that go out'],
+    ['business', 'tag', 'Business details', 'Name, phone, timezone, tax, tracking window'],
+    ['reviews', 'star', 'Reviews', 'What customers said, and what to publish'],
+    ['messages', 'send', 'All texts', 'Everything sent or waiting'],
+    ['activity', 'history', 'Activity log', 'Every change, with a timestamp'],
   ];
 
   mount(app,
     header('Setup', state.settings.business_name),
-    h('div', { class: 'card card--flush' }, ...links.map(([route, icon, title, sub]) =>
+    h('div', { class: 'card card--flush' }, ...links.map(([route, iconName, title, sub]) =>
       h('a', { class: 'row', href: `#/${route}` },
-        h('span', { style: { fontSize: '1.25rem' }, text: icon }),
+        h('span', { class: 'row-icon' }, icon(iconName, { size: 21 })),
         h('div', { class: 'row-main' },
           h('div', { class: 'row-title', text: title }),
           h('div', { class: 'row-sub', text: sub })
         ),
-        h('span', { class: 'chev', text: '›' })
+        h('span', { class: 'chev' }, icon('chevron', { size: 17 }))
       )
     )),
 
@@ -2035,7 +2034,7 @@ async function renderCatalogView() {
             )
           )
         ))
-      : h('div', { class: 'card' }, empty('📋', 'Nothing here yet.'))
+      : h('div', { class: 'card' }, empty('list', 'Nothing here yet.'))
   );
 }
 
@@ -2130,7 +2129,7 @@ async function renderTemplates() {
           h('div', { class: 'row-title', text: t.name }),
           h('div', { class: 'row-sub', text: t.body })
         ),
-        h('span', { class: 'chev', text: '›' })
+        h('span', { class: 'chev' }, icon('chevron', { size: 17 }))
       )
     ))
   );
@@ -2203,6 +2202,7 @@ async function renderBusinessSettings() {
   const s = data.settings;
 
   const name = h('input', { type: 'text', value: s.business_name, maxlength: 120 });
+  const tagline = h('input', { type: 'text', value: s.business_tagline, maxlength: 90 });
   const phone = h('input', { type: 'tel', value: s.business_phone, maxlength: 32 });
   const email = h('input', { type: 'email', value: s.business_email, maxlength: 254 });
   const city = h('input', { type: 'text', value: s.business_city, maxlength: 120 });
@@ -2220,6 +2220,7 @@ async function renderBusinessSettings() {
     try {
       await api.patch('/api/admin/settings', {
         business_name: name.value,
+        business_tagline: tagline.value,
         business_phone: phone.value,
         business_email: email.value,
         business_city: city.value,
@@ -2246,6 +2247,7 @@ async function renderBusinessSettings() {
     h('div', { class: 'card' },
       h('div', { class: 'card-head' }, h('h2', { text: 'The basics' })),
       field('Business name', name),
+      field('Tagline', tagline, 'Sits under your logo on the customer\'s page.'),
       field('Phone', phone, 'Goes into texts wherever {{business_phone}} appears.'),
       field('Email', email),
       field('Town or city', city),
@@ -2298,7 +2300,7 @@ async function renderReviews() {
           h('div', { class: 'stat-value', text: String(average) }),
           h('div', { class: 'stat-label', text: `across ${reviews.length} review${reviews.length === 1 ? '' : 's'}` })
         ),
-        h('div', { style: { fontSize: '1.5rem' }, text: '⭐' })
+        h('span', { style: { color: 'var(--gold)' } }, icon('star', { size: 30, stroke: 1.5 }))
       )
     ) : null,
 
@@ -2306,7 +2308,7 @@ async function renderReviews() {
       ? h('div', {}, ...reviews.map((r) => h('div', { class: 'card' },
           h('div', { class: 'spread' },
             h('div', { style: { fontWeight: '650' }, text: r.customer_name || 'A customer' }),
-            h('span', { text: '★'.repeat(r.rating) + '☆'.repeat(5 - r.rating) })
+            stars(r.rating, { size: 17 })
           ),
           r.comment ? h('p', { class: 'small', style: { marginTop: '8px' }, text: r.comment }) : null,
           h('div', { class: 'spread', style: { marginTop: '12px' } },
@@ -2321,7 +2323,7 @@ async function renderReviews() {
             })
           )
         )))
-      : h('div', { class: 'card' }, empty('⭐', 'No reviews yet. They are asked for gently, after the job.'))
+      : h('div', { class: 'card' }, empty('star', 'No reviews yet. They are asked for gently, after the job.'))
   );
 }
 

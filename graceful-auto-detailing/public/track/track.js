@@ -1,4 +1,4 @@
-import { h, mount, api, ApiError, fmtCountdown, fmtDistance } from '../shared/ui.js';
+import { h, mount, api, ApiError, fmtCountdown, fmtDistance, icon } from '../shared/ui.js';
 
 const app = document.getElementById('app');
 
@@ -195,7 +195,7 @@ function renderEnded(reason) {
   clearInterval(clock);
   const arrived = reason === 'arrived';
   mount(app, h('div', { class: 'ended' },
-    h('span', { class: 'ended-emoji', text: arrived ? '👋' : '🔒' }),
+    h('div', { class: 'ended-icon' }, icon(arrived ? 'pin' : 'shield', { size: 46, stroke: 1.3 })),
     h('h1', { text: arrived ? 'Arrived' : 'Tracking has finished' }),
     h('p', { text: arrived
       ? 'They are with you now. This link has turned itself off.'
@@ -217,7 +217,7 @@ async function tick() {
     /* A blip is not worth clearing the screen for — keep the last view. */
     if (!trip) {
       mount(app, h('div', { class: 'ended' },
-        h('span', { class: 'ended-emoji', text: '⚠️' }),
+        h('div', { class: 'ended-icon' }, icon('compass', { size: 46, stroke: 1.3 })),
         h('h1', { text: 'Cannot reach the map' }),
         h('p', { text: 'Check your connection — this will pick itself back up.' })
       ));

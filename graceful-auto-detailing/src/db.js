@@ -387,6 +387,7 @@ export function tx(fn) {
 
 export const SETTING_DEFAULTS = {
   business_name: 'Graceful Auto Detailing',
+  business_tagline: 'Cleaner car. Greater impression.',
   business_phone: '',
   business_email: '',
   business_city: '',

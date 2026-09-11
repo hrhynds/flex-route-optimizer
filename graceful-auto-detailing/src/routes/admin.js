@@ -1221,6 +1221,7 @@ router.patch('/api/admin/reviews/:id', guard(async ({ req, res, params, actor })
 
 const EDITABLE_SETTINGS = {
   business_name: (x) => v.str(x, 'Business name', { min: 1, max: 120 }),
+  business_tagline: (x) => v.str(x, 'Tagline', { max: 90, optional: true }),
   business_phone: (x) => v.phone(x, 'Business phone'),
   business_email: (x) => v.email(x, 'Business email'),
   business_city: (x) => v.str(x, 'City', { max: 120, optional: true }),

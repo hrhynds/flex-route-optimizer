@@ -98,6 +98,43 @@ A customer marked as not wanting texts is never texted; the app refuses.
 
 ---
 
+## Look and feel
+
+The app wears the same clothes as **gracefulautodetail.com**, so a customer
+tapping through from a text finds the business they recognise rather than a
+generic booking tool. Nothing here is a guess — the palette and the faces were
+read off the site itself.
+
+| | |
+|---|---|
+| Ground | `#000000`, panels `#080808` / `#0d0d0f` |
+| Accent | `#2b8af5`, with `#1565c8` and `#5aaeff` either side of it |
+| Text | chrome `#e2e5ea` for headings, silver `#b8bdc8` for copy |
+| Highlight | gold `#d4a017` for tips and reviews |
+| Headings | Barlow Condensed 900, italic, uppercase |
+| Body | Rajdhani |
+| Corners | 2–6px, as the site keeps them — never pill-shaped |
+
+Both typefaces are **served from this app**, not from Google. That keeps the
+content policy strict with no exception for a third-party origin, and means a
+customer opening their appointment does not quietly announce the visit to
+anyone else. They are SIL Open Font License 1.1; see
+`public/shared/fonts/OFL.txt`.
+
+The badge is the real logo, and the small mark is its GA monogram redrawn as an
+SVG so it stays legible down to 38px. Icons throughout are inline SVG rather
+than emoji — colour emoji sit badly against a black-and-chrome brand.
+
+The theme is **dark everywhere, deliberately**, because the brand is. There is
+no light variant to drift out of step with it. Tests hold the palette, the
+self-hosted faces and the no-emoji rule in place so a later change cannot
+quietly undo any of it.
+
+The tagline under the logo on a customer's page is a setting, so it can be
+reworded without touching code.
+
+---
+
 ## Configuration
 
 All optional except `APP_SECRET` in production.

@@ -118,3 +118,60 @@ describe('money and time on the client agree with the server', () => {
     assert.match(parts.period, /^(AM|PM)$/, 'the period stands on its own');
   });
 });
+
+describe('the brand is wired up and self-contained', () => {
+  test('every face the stylesheet asks for exists on disk', () => {
+    const css = readFileSync(path.join(PUBLIC, 'shared/fonts.css'), 'utf8');
+    const refs = [...css.matchAll(/url\('([^']+)'\)/g)].map((m) => m[1]);
+    assert.ok(refs.length >= 6, `expected the brand's faces, found ${refs.length}`);
+    for (const ref of refs) {
+      const file = path.join(PUBLIC, 'shared', ref);
+      assert.ok(statSync(file).size > 4000, `${ref} is missing or truncated`);
+    }
+  });
+
+  test('the fonts are served from here, never from a third party', () => {
+    const css = readFileSync(path.join(PUBLIC, 'shared/fonts.css'), 'utf8');
+    assert.ok(!/https?:/.test(css), 'a font is being pulled from another origin');
+    for (const family of ['Barlow Condensed', 'Rajdhani']) {
+      assert.ok(css.includes(family), `${family} is not declared`);
+    }
+  });
+
+  test('every page loads the brand faces and declares the dark ground', () => {
+    for (const file of pages) {
+      const source = readFileSync(file, 'utf8');
+      assert.match(source, /href="\/shared\/fonts\.css"/, `${rel(file)} does not load the fonts`);
+      assert.match(source, /name="theme-color" content="#000000"/, `${rel(file)} does not paint the browser chrome black`);
+    }
+  });
+
+  test('the palette is the one the website uses', () => {
+    const css = readFileSync(path.join(PUBLIC, 'shared/base.css'), 'utf8');
+    /* Taken from gracefulautodetail.com's own custom properties. */
+    const brand = {
+      '--black': '#000000',
+      '--panel': '#080808',
+      '--blue': '#1565c8',
+      '--blue-bright': '#2b8af5',
+      '--blue-light': '#5aaeff',
+      '--silver': '#b8bdc8',
+      '--chrome': '#e2e5ea',
+    };
+    for (const [name, value] of Object.entries(brand)) {
+      assert.match(css, new RegExp(`${name}\\s*:\\s*${value}\\b`, 'i'), `${name} should be ${value}`);
+    }
+  });
+
+  test('no emoji are left in the interface chrome', () => {
+    /* The brand is sharp and monochrome; colour emoji fight it. Icons are SVG. */
+    const emoji = /[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}\u{FE0F}]/u;
+    for (const file of [...scripts, ...pages]) {
+      const source = readFileSync(file, 'utf8');
+      const hits = source.split('\n')
+        .map((line, i) => [i + 1, line])
+        .filter(([, line]) => emoji.test(line));
+      assert.equal(hits.length, 0, `${rel(file)}:${hits[0]?.[0]} still has an emoji: ${hits[0]?.[1].trim().slice(0, 70)}`);
+    }
+  });
+});

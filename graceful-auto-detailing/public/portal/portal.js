@@ -1,6 +1,6 @@
 import {
   h, mount, api, ApiError, money, price, toast, sheet, field, moneyLine, moneyInput,
-  fmtCountdown, fmtDistance, fmtDuration, monogram, setTimezone,
+  fmtCountdown, fmtDistance, fmtDuration, setTimezone, icon, stars,
 } from '../shared/ui.js';
 
 const app = document.getElementById('app');
@@ -28,7 +28,7 @@ async function load() {
 function renderGone(err) {
   const expired = err instanceof ApiError && err.status === 404;
   mount(app, h('div', { class: 'gone' },
-    h('span', { class: 'gone-emoji', text: expired ? '🔒' : '⚠️' }),
+    h('div', { class: 'gone-icon' }, icon(expired ? 'shield' : 'clock', { size: 44, stroke: 1.3 })),
     h('h1', { text: expired ? 'This link is no longer live' : 'Something went wrong' }),
     h('p', { text: expired
       ? 'Appointment links expire after a while, for your privacy. Send us a message and we will text you a fresh one.'
@@ -49,8 +49,8 @@ function render() {
 
   mount(app,
     h('header', { class: 'portal-top' },
-      h('div', { class: 'biz-mark', text: monogram(biz.name) }),
-      h('div', { class: 'biz-name', text: biz.name }),
+      h('img', { class: 'biz-mark', src: '/shared/logo.webp', alt: biz.name, width: 124, height: 124 }),
+      biz.tagline ? h('div', { class: 'biz-tagline', text: biz.tagline }) : null,
       h('h1', { class: 'greeting', text: a.customer_first ? `Hi ${a.customer_first}` : 'Your appointment' }),
       h('div', { class: 'when', text: `${a.service_name} · ${a.date_label} at ${a.time_label}` }),
       h('div', { class: 'status-line' },
@@ -413,7 +413,7 @@ function reviewCard() {
   const existing = data.review;
 
   let chosen = existing?.rating ?? 0;
-  const stars = h('div', { class: 'stars' });
+  const starRow = h('div');
   const comment = h('textarea', {
     placeholder: 'Anything you want to add? (optional)', maxlength: 1500,
     value: existing?.comment ?? '',
@@ -434,19 +434,16 @@ function reviewCard() {
     },
   });
 
-  const paintStars = () => mount(stars, ...[1, 2, 3, 4, 5].map((n) =>
-    h('button', {
-      class: n <= chosen ? 'lit' : '', text: '★',
-      'aria-label': `${n} star${n > 1 ? 's' : ''}`,
-      onClick: () => { chosen = n; paintStars(); submit.disabled = false; },
-    })
-  ));
+  const paintStars = () => mount(starRow, stars(chosen, {
+    size: 34,
+    onPick: (n) => { chosen = n; paintStars(); submit.disabled = false; },
+  }));
   paintStars();
 
   return h('section', { class: 'card' },
     h('div', { class: 'card-head' }, h('h2', { text: existing ? 'Your review' : 'How did we do?' })),
     h('p', { class: 'small muted', text: data.business.review_prompt }),
-    stars,
+    starRow,
     h('div', { class: 'field' }, comment),
     submit
   );
