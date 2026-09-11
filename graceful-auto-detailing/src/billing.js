@@ -34,7 +34,6 @@ export function appointmentTotals(appointmentId, { discountCents = null } = {}) 
   const taxable = Math.max(0, subtotal - discount);
   const rate = invoice && invoice.status !== 'draft' ? invoice.tax_rate_bp : taxRateBp();
   const tax = Math.round((taxable * rate) / 10000);
-  const tip = invoice?.tip_cents ?? 0;
 
   return {
     service_name: appt.service_name,
@@ -45,8 +44,7 @@ export function appointmentTotals(appointmentId, { discountCents = null } = {}) 
     discount_cents: discount,
     tax_rate_bp: rate,
     tax_cents: tax,
-    tip_cents: tip,
-    total_cents: taxable + tax + tip,
+    total_cents: taxable + tax,
     /* Any "starting at" line means the figure is a guide, not a final number. */
     is_estimate: Boolean(appt.service_price_cents && addons.some((a) => a.price_is_from)),
   };
@@ -86,6 +84,11 @@ function hydrate(invoice) {
     items: q.all('SELECT * FROM invoice_items WHERE invoice_id = ? ORDER BY sort_order, id', invoice.id),
     payments: q.all('SELECT * FROM payments WHERE invoice_id = ? ORDER BY received_at, id', invoice.id),
     balance_cents: invoice.total_cents - invoice.paid_cents,
+    /* Nothing asks for a tip. This is only what came in with the money, for
+       the owner's own books — it is not part of what was invoiced. */
+    tips_received_cents: q.pluck(
+      'SELECT COALESCE(SUM(tip_cents), 0) AS n FROM payments WHERE invoice_id = ?', invoice.id
+    ),
   };
 }
 
@@ -139,14 +142,14 @@ export function buildInvoice(appointmentId, { actor = 'owner' } = {}) {
 /* One place that decides what an invoice adds up to.
 
    The model, stated once so nothing double-counts:
-     items          -> subtotal
-     subtotal - discount + tax + tip  -> total
-     payments (amount only)           -> paid
-     total - paid                     -> balance
+     items                     -> subtotal
+     subtotal - discount + tax -> total
+     payments (amount only)    -> paid
+     total - paid              -> balance
 
-   A tip lives on the invoice, because it is a decision about the job, not a
-   property of whichever payment happens to settle it. A payment's tip_cents is
-   kept only as a note on how that money arrived. */
+   Nothing here asks a customer for a tip. If one is handed over anyway, it is
+   recorded on the payment that brought it (payments.tip_cents) as a note on
+   how that money arrived, and never as something the invoice demanded. */
 export function recalcInvoice(invoiceId) {
   const invoice = q.get('SELECT * FROM invoices WHERE id = ?', invoiceId);
   if (!invoice) throw notFound('That invoice does not exist.');
@@ -155,8 +158,7 @@ export function recalcInvoice(invoiceId) {
   const discount = Math.min(Math.max(invoice.discount_cents, 0), subtotal);
   const rate = invoice.status === 'draft' ? taxRateBp() : invoice.tax_rate_bp;
   const tax = Math.round(((subtotal - discount) * rate) / 10000);
-  const tip = Math.max(0, invoice.tip_cents);
-  const total = subtotal - discount + tax + tip;
+  const total = subtotal - discount + tax;
 
   const paid = q.pluck('SELECT COALESCE(SUM(amount_cents), 0) AS n FROM payments WHERE invoice_id = ?', invoiceId);
 
@@ -170,22 +172,9 @@ export function recalcInvoice(invoiceId) {
     `UPDATE invoices SET subtotal_cents = ?, discount_cents = ?, tax_rate_bp = ?, tax_cents = ?,
             tip_cents = ?, total_cents = ?, paid_cents = ?, status = ?, paid_at = ?, updated_at = ?
       WHERE id = ?`,
-    subtotal, discount, rate, tax, tip, total, paid, status, paidAt, Date.now(), invoiceId
+    subtotal, discount, rate, tax, 0, total, paid, status, paidAt, Date.now(), invoiceId
   );
   return getInvoiceById(invoiceId);
-}
-
-/* A tip is the customer's call, so both sides can set it — but only while the
-   invoice is still open. */
-export function setTip(invoiceId, tipCents, { actor = 'owner' } = {}) {
-  const invoice = q.get('SELECT * FROM invoices WHERE id = ?', invoiceId);
-  if (!invoice) throw notFound('That invoice does not exist.');
-  if (invoice.status === 'void') throw conflict('That invoice is void.');
-  if (invoice.status === 'paid') throw conflict('That invoice is already settled.');
-  if (tipCents < 0 || tipCents > 1000000) throw bad('That tip is not a sensible amount.');
-  q.run('UPDATE invoices SET tip_cents = ?, updated_at = ? WHERE id = ?', tipCents, Date.now(), invoiceId);
-  audit(actor, 'invoice.tip', 'invoice', invoiceId, { tipCents });
-  return recalcInvoice(invoiceId);
 }
 
 export function issueInvoice(invoiceId, { actor = 'owner' } = {}) {
@@ -236,12 +225,4 @@ export function deletePayment(paymentId, { actor = 'owner' } = {}) {
   q.run('DELETE FROM payments WHERE id = ?', paymentId);
   audit(actor, 'payment.delete', 'invoice', row.invoice_id, { paymentId });
   return recalcInvoice(row.invoice_id);
-}
-
-export function tipPresets() {
-  return String(getSetting('tip_presets') || '15,18,20')
-    .split(',')
-    .map((n) => Number.parseInt(n.trim(), 10))
-    .filter((n) => Number.isFinite(n) && n > 0 && n <= 100)
-    .slice(0, 4);
 }

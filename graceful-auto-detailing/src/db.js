@@ -228,7 +228,7 @@ CREATE TABLE IF NOT EXISTS invoices (
   discount_cents INTEGER NOT NULL DEFAULT 0,
   tax_cents      INTEGER NOT NULL DEFAULT 0,
   tax_rate_bp    INTEGER NOT NULL DEFAULT 0,
-  tip_cents      INTEGER NOT NULL DEFAULT 0,
+  tip_cents      INTEGER NOT NULL DEFAULT 0,  -- unused; tips are recorded on the payment
   total_cents    INTEGER NOT NULL DEFAULT 0,
   paid_cents     INTEGER NOT NULL DEFAULT 0,
   notes          TEXT NOT NULL DEFAULT '',
@@ -395,7 +395,6 @@ export const SETTING_DEFAULTS = {
   currency: 'USD',
   tax_rate_bp: '0',                 // basis points; 625 = 6.25%
   tracking_minutes: String(config.tracking.defaultMinutes),
-  tip_presets: '15,18,20',
   payment_instructions: 'Cash, card or Zelle on completion.',
   review_prompt: 'If today went well, a quick word means a lot. Totally optional.',
   invoice_prefix: 'GAD',

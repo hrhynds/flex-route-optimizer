@@ -395,15 +395,20 @@ describe('doing the job and getting paid', () => {
     const view = await S.customerClient.get(`/api/portal/${S.portalToken}`);
     assert.equal(view.data.invoice.number, S.invoice.number);
     assert.equal(view.data.invoice.balance_cents, 21000);
-    assert.equal(view.data.invoice.can_tip, true);
   });
 
-  test('the customer leaves a tip and the balance grows by exactly that', async () => {
-    const { status, data } = await S.customerClient.post(`/api/portal/${S.portalToken}/tip`, { tip_cents: 3000 });
-    assert.equal(status, 200);
-    assert.equal(data.invoice.tip_cents, 3000);
-    assert.equal(data.invoice.total_cents, 24000);
-    assert.equal(data.invoice.balance_cents, 24000);
+  test('the customer is never asked for a tip, and cannot be charged one', async () => {
+    const view = await S.customerClient.get(`/api/portal/${S.portalToken}`);
+    const serialised = JSON.stringify(view.data);
+    assert.ok(!/tip/i.test(serialised), 'the word tip appears nowhere on the customer page');
+    assert.equal(view.data.invoice.total_cents, 21000, 'the total is the work, and nothing else');
+
+    /* And the route that used to accept one is gone rather than merely hidden. */
+    const attempt = await S.customerClient.post(`/api/portal/${S.portalToken}/tip`, { tip_cents: 3000 });
+    assert.ok(attempt.status === 404 || attempt.status === 405, `got ${attempt.status}`);
+
+    const after = await S.customerClient.get(`/api/portal/${S.portalToken}`);
+    assert.equal(after.data.invoice.total_cents, 21000, 'and nothing moved');
   });
 
   test('saying how they will pay does not mark anything as paid', async () => {
@@ -414,18 +419,23 @@ describe('doing the job and getting paid', () => {
     assert.equal(view.data.invoice.status, 'sent');
   });
 
-  test('the owner records the money and the invoice settles', async () => {
+  test('the owner records the money, including a tip handed over unprompted', async () => {
     const { data } = await admin.post(`/api/admin/invoices/${S.invoice.id}/payments`, {
       amount_cents: 24000, tip_cents: 3000, method: 'zelle', reference: 'ZL-8891',
     });
     assert.equal(data.invoice.status, 'paid');
-    assert.equal(data.invoice.balance_cents, 0);
+    assert.equal(data.invoice.total_cents, 21000, 'the invoice still only asked for the work');
+    assert.equal(data.invoice.paid_cents, 24000, 'but 24000 arrived');
+    assert.equal(data.invoice.tips_received_cents, 3000, 'and 3000 of it was a tip');
     assert.ok(data.invoice.paid_at);
   });
 
-  test('a tip cannot be changed after the invoice is settled', async () => {
-    const { status } = await S.customerClient.post(`/api/portal/${S.portalToken}/tip`, { tip_cents: 9900 });
-    assert.equal(status, 409);
+  test('a tip is never more than the payment that carried it', async () => {
+    const { status, data } = await admin.post(`/api/admin/invoices/${S.invoice.id}/payments`, {
+      amount_cents: 1000, tip_cents: 5000,
+    });
+    assert.equal(status, 400);
+    assert.match(data.error, /cannot be more than the payment/);
   });
 
   test('the customer leaves a review, and it is not published until the owner says so', async () => {
@@ -448,7 +458,8 @@ describe('doing the job and getting paid', () => {
 
   test('the dashboard reports the week honestly', async () => {
     const { data } = await admin.get('/api/admin/dashboard');
-    assert.equal(data.stats.week_collected_cents, 24000);
+    assert.equal(data.stats.week_collected_cents, 24000, 'everything that arrived');
+    assert.equal(data.stats.week_tips_cents, 3000, 'of which this much was a tip');
     assert.equal(data.stats.outstanding_cents, 0);
   });
 });

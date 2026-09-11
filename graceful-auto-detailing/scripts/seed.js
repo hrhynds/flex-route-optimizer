@@ -2,7 +2,7 @@
    dashboard can be looked at properly before any real customer exists.
    Refuses to touch a database that already has customers in it. */
 import { init, close, q, getSetting } from '../src/db.js';
-import { buildInvoice, issueInvoice, recordPayment, setTip } from '../src/billing.js';
+import { buildInvoice, issueInvoice, recordPayment } from '../src/billing.js';
 import { createPortalLink } from '../src/links.js';
 
 init();
@@ -102,10 +102,11 @@ for (const person of people) {
 
   if (person.paid) {
     const invoice = buildInvoice(appt.id, { actor: 'seed' });
-    setTip(invoice.id, 800, { actor: 'seed' });
     const issued = issueInvoice(invoice.id, { actor: 'seed' });
+    /* Nothing asked for the tip; Priya handed one over and it is recorded
+       against the payment that brought it. */
     recordPayment(issued.id, {
-      amountCents: issued.total_cents, tipCents: 800, method: 'card', actor: 'seed',
+      amountCents: issued.total_cents + 800, tipCents: 800, method: 'card', actor: 'seed',
     });
     q.run(
       'INSERT INTO reviews(appointment_id, rating, comment, author_name, published, created_at) VALUES(?,?,?,?,1,?)',

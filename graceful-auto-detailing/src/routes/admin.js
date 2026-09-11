@@ -1016,6 +1016,9 @@ router.get('/api/admin/invoices', guard(async ({ req, res }) => {
       return {
         ...inv,
         balance_cents: inv.total_cents - inv.paid_cents,
+        tips_received_cents: q.pluck(
+          'SELECT COALESCE(SUM(tip_cents), 0) AS n FROM payments WHERE invoice_id = ?', inv.id
+        ),
         service_name: appt?.service_name ?? '',
         starts_at: appt?.starts_at ?? null,
         customer_name: appt ? q.pluck('SELECT name FROM customers WHERE id = ?', appt.customer_id) : '',
@@ -1233,13 +1236,6 @@ const EDITABLE_SETTINGS = {
   },
   tax_rate_bp: (x) => String(v.int(x, 'Tax rate', { min: 0, max: 3000 })),
   tracking_minutes: (x) => String(v.int(x, 'Tracking window', { min: 5, max: config.tracking.maxMinutes })),
-  tip_presets: (x) => {
-    const parts = v.str(x, 'Tip presets', { max: 40 }).split(',').map((n) => Number.parseInt(n.trim(), 10));
-    if (!parts.length || parts.some((n) => !Number.isFinite(n) || n < 0 || n > 100)) {
-      throw bad('Tip presets must be whole percentages, comma separated.');
-    }
-    return parts.slice(0, 4).join(',');
-  },
   payment_instructions: (x) => v.text(x, 'Payment instructions', { max: 500, optional: true }),
   review_prompt: (x) => v.text(x, 'Review prompt', { max: 300, optional: true }),
   invoice_prefix: (x) => v.str(x, 'Invoice prefix', { min: 1, max: 8 }).replace(/[^A-Za-z0-9-]/g, ''),

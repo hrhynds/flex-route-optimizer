@@ -30,7 +30,7 @@ npm test               # 123 tests, including the security properties below
 * **Today** — what is on, what came in this week, what is still owed.
 * **Schedule** — book a job against a customer, a vehicle and a service.
 * **Customers** — profiles with vehicles, notes and their whole history.
-* **Money** — invoices built from what was actually done, payments, tips.
+* **Money** — invoices built from what was actually done, and payments.
 * **Setup** — services, add-ons, text templates, tax, timezone, tracking window.
 
 Statuses move in ways that make sense: *scheduled → confirmed → on my way →
@@ -40,9 +40,14 @@ belong. The app refuses a jump that would not happen in real life.
 ### The customer's page — `/p/<link>`
 
 Their appointment, the extras worth considering written in plain words, a total
-that moves the instant they tap one, before-and-after photos, the invoice, a
-tip if they feel like it, and a review afterwards if they want to leave one.
-Nothing on the page pushes.
+that moves the instant they tap one, before-and-after photos, the invoice, and a
+review afterwards if they want to leave one. The extras sit high enough to see
+without scrolling and low enough that the page says hello first.
+
+**Nobody is ever asked for a tip.** There is no tip prompt anywhere a customer
+can see. If one is handed over on the day it is recorded against the payment
+that brought it, for the owner's own books — never as something the invoice
+asked for.
 
 ---
 
@@ -110,7 +115,7 @@ read off the site itself.
 | Ground | `#000000`, panels `#080808` / `#0d0d0f` |
 | Accent | `#2b8af5`, with `#1565c8` and `#5aaeff` either side of it |
 | Text | chrome `#e2e5ea` for headings, silver `#b8bdc8` for copy |
-| Highlight | gold `#d4a017` for tips and reviews |
+| Highlight | gold `#d4a017` for reviews and anything owed |
 | Headings | Barlow Condensed 900, italic, uppercase |
 | Body | Rajdhani |
 | Corners | 2–6px, as the site keeps them — never pill-shaped |
@@ -249,10 +254,10 @@ does erase the trail.
 
 ## What this deliberately does not do
 
-* **It does not take card payments.** It produces a proper invoice, records what
-  arrived and how, and tracks tips — but it will not ask a customer for card
-  details, because doing that safely means PCI scope this does not have. Cash,
-  card in person, Zelle, Venmo and the rest are recorded as they happen.
+* **It does not take card payments.** It produces a proper invoice and records
+  what arrived and how — but it will not ask a customer for card details,
+  because doing that safely means PCI scope this does not have. Cash, card in
+  person, Zelle, Venmo and the rest are recorded as they happen.
 * **It does not geocode addresses**, which would mean sending every customer's
   home address to a third party. Pins are set by hand, once, and remembered.
 * **It does not charge a subscription and has no customer accounts.** A customer
@@ -273,7 +278,7 @@ src/
   validate.js        every field that reaches the database
   links.js           customer links and trips — the only place location lives
   appointments.js    statuses and the two serialisers
-  billing.js         totals, invoices, payments, tips
+  billing.js         totals, invoices and payments
   sms.js             templates and sending
   photos.js          uploads, sniffed by magic bytes
   geo.js             distance and ETA

@@ -6,7 +6,7 @@ import * as v from '../validate.js';
 import { clientIp, rateLimit, sameOrigin } from '../security.js';
 import { resolvePortalToken, touchPortalLink, liveTripForAppointment, publicTripState, countTripView } from '../links.js';
 import { STATUSES, customerOf, vehicleOf, photosOf } from '../appointments.js';
-import { appointmentTotals, getInvoice, setTip, tipPresets } from '../billing.js';
+import { appointmentTotals, getInvoice } from '../billing.js';
 import { getPhoto, photoPath } from '../photos.js';
 import { vehicleLabel, formatWhen } from '../sms.js';
 
@@ -103,7 +103,6 @@ function buildPortalPayload(appointment, link, token) {
       subtotal_cents: totals.subtotal_cents,
       discount_cents: totals.discount_cents,
       tax_cents: totals.tax_cents,
-      tip_cents: totals.tip_cents,
       total_cents: totals.total_cents,
       is_estimate: totals.is_estimate,
     },
@@ -133,13 +132,10 @@ function buildPortalPayload(appointment, link, token) {
       subtotal_cents: invoice.subtotal_cents,
       discount_cents: invoice.discount_cents,
       tax_cents: invoice.tax_cents,
-      tip_cents: invoice.tip_cents,
       total_cents: invoice.total_cents,
       paid_cents: invoice.paid_cents,
       balance_cents: invoice.balance_cents,
       notes: invoice.notes,
-      can_tip: invoice.status === 'sent',
-      tip_presets: tipPresets(),
     } : null,
     /* Present only while the owner has a trip running, and then it is exactly
        what the tracking endpoint returns — one shape, one decision about what
@@ -231,16 +227,6 @@ router.get('/api/portal/:token/photo/:photoId', portalGuard(async ({ req, res, a
 /* --------------------------------------------------------------------------
    Tip, payment intent and review
    -------------------------------------------------------------------------- */
-
-router.post('/api/portal/:token/tip', portalGuard(async ({ req, res, link, appointment, params }) => {
-  const body = await readJson(req);
-  const invoice = getInvoice(appointment.id);
-  if (!invoice || invoice.status === 'draft') throw conflict('There is no invoice to tip on yet.');
-  const tip = v.cents(body.tip_cents, 'Tip', { min: 0, max: 1000000 });
-  setTip(invoice.id, tip, { actor: 'customer' });
-  portalEvent(appointment.id, 'tip_set', String(tip));
-  ok(req, res, buildPortalPayload(appointment, link, params.token));
-}, { write: true }));
 
 /* The customer saying how they intend to pay is a heads-up for the owner, not
    a payment. Nothing is marked as received until the owner records it. */

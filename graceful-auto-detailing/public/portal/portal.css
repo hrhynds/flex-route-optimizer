@@ -4,12 +4,15 @@
 
 .boot-splash { display: grid; place-items: center; min-height: 70dvh; color: var(--text-faint); }
 
+/* Kept deliberately compact: the extras have to clear the fold on the
+   smallest phone anyone still carries, without the page opening on a sales
+   pitch before it has said hello. */
 .portal-top {
-  padding: calc(var(--safe-top) + 26px) 0 4px;
+  padding: calc(var(--safe-top) + 16px) 0 2px;
   text-align: center;
 }
 .portal-top .biz-mark {
-  width: min(124px, 34vw); height: auto; margin: 0 auto 4px;
+  width: min(94px, 26vw); height: auto; margin: 0 auto 2px;
   display: block; object-fit: contain;
 }
 .portal-top .biz-tagline {
@@ -18,12 +21,12 @@
   text-transform: uppercase; letter-spacing: 0.22em;
 }
 .portal-top .greeting {
-  font-size: 2.1rem; margin-top: 14px;
+  font-size: 1.9rem; margin-top: 9px;
 }
 .portal-top .when {
-  color: var(--text-dim); font-size: 0.86rem; margin-top: 8px; font-weight: 600;
+  color: var(--text-dim); font-size: 0.84rem; margin-top: 5px; font-weight: 600;
 }
-.portal-top .status-line { margin-top: 14px; }
+.portal-top .status-line { margin-top: 10px; }
 
 /* ---- arrival ---- */
 
@@ -156,25 +159,6 @@
 }
 .ba-col img { border-radius: var(--radius-sm); aspect-ratio: 1; object-fit: cover; width: 100%; }
 .ba-col img + img { margin-top: 8px; }
-
-/* ---- tip ---- */
-
-.tip-row { display: flex; gap: 8px; margin-top: 12px; }
-.tip-row .tip-btn {
-  flex: 1; min-height: 58px; border-radius: var(--radius-sm);
-  border: 1px solid var(--line); background: var(--panel-2);
-  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 1px;
-}
-.tip-row .tip-btn.on {
-  border-color: var(--gold); background: var(--gold-soft);
-  box-shadow: 0 0 18px rgba(212, 160, 23, 0.16);
-}
-.tip-row .tip-pct {
-  font-family: var(--font-head); font-weight: 900; font-style: italic; font-size: 1.2rem;
-  color: var(--chrome);
-}
-.tip-row .tip-amt { font-size: 0.72rem; color: var(--text-faint); font-variant-numeric: tabular-nums; }
-.tip-row .tip-btn.on .tip-pct { color: var(--gold); }
 
 /* ---- stars ---- */
 

@@ -922,7 +922,6 @@ function addonsCard(a, available, reload) {
 
     moneyLine('Subtotal', money(a.totals.subtotal_cents)),
     a.totals.tax_cents ? moneyLine('Tax', money(a.totals.tax_cents)) : null,
-    a.totals.tip_cents ? moneyLine('Tip', money(a.totals.tip_cents)) : null,
     moneyLine('Total', money(a.totals.total_cents), { total: true }),
 
     a.addons_locked
@@ -1085,7 +1084,6 @@ function invoiceCard(a, invoice, reload) {
     ...invoice.items.map((item) => moneyLine(item.label, money(item.amount_cents))),
     invoice.discount_cents ? moneyLine('Discount', `−${money(invoice.discount_cents)}`) : null,
     invoice.tax_cents ? moneyLine('Tax', money(invoice.tax_cents)) : null,
-    invoice.tip_cents ? moneyLine('Tip', money(invoice.tip_cents)) : null,
     moneyLine('Total', money(invoice.total_cents), { total: true }),
     invoice.paid_cents ? moneyLine('Paid', `−${money(invoice.paid_cents)}`) : null,
     invoice.paid_cents && balance > 0 ? moneyLine('Balance', money(balance), { total: true }) : null,
@@ -1143,10 +1141,10 @@ const METHOD_LABELS = {
 function paymentSheet(invoice, balance, reload) {
   return sheet({
     title: 'Record a payment',
-    subtitle: 'What actually arrived. The tip is the part of it that was a tip.',
+    subtitle: 'What actually arrived. If they handed over a tip, say how much of it was that.',
     build: ({ close }) => {
       const amount = moneyInput(balance);
-      const tip = moneyInput(invoice.tip_cents);
+      const tip = moneyInput(0);
       let method = 'cash';
       const chips = h('div', { class: 'chip-row' });
       const paint = () => mount(chips, ...Object.entries(METHOD_LABELS).map(([key, label]) =>
@@ -1161,7 +1159,7 @@ function paymentSheet(invoice, balance, reload) {
 
       return h('div', {},
         field('Amount received', amount),
-        field('Of which tip', tip),
+        field('Of which was a tip', tip, 'Optional. Nothing on the customer\'s page ever asks for one.'),
         h('div', { class: 'field' }, h('div', { class: 'field-label', text: 'How' }), chips),
         field('Note', reference),
         h('div', { class: 'sheet-actions' },
@@ -1761,7 +1759,7 @@ async function renderMoney() {
 
   const owed = outstanding.reduce((s, i) => s + i.balance_cents, 0);
   const collected = paid.reduce((s, i) => s + i.paid_cents, 0);
-  const tips = paid.reduce((s, i) => s + i.tip_cents, 0);
+  const tips = paid.reduce((s, i) => s + (i.tips_received_cents || 0), 0);
 
   const invoiceRow = (inv) => h('a', { class: 'row', href: `#/invoice/${inv.id}` },
     h('div', { class: 'row-main' },
@@ -1775,7 +1773,7 @@ async function renderMoney() {
   );
 
   mount(app,
-    header('Money', 'Invoices, payments and tips'),
+    header('Money', 'Invoices and payments'),
     h('div', { class: 'stat-grid' },
       stat(money(owed), 'owed to you', owed > 0 ? 'gold' : ''),
       stat(money(collected), 'collected', 'accent'),
@@ -1824,8 +1822,7 @@ async function renderInvoiceDetail(idRaw) {
       ...inv.items.map((item) => moneyLine(item.label, money(item.amount_cents))),
       inv.discount_cents ? moneyLine('Discount', `−${money(inv.discount_cents)}`) : null,
       inv.tax_cents ? moneyLine('Tax', money(inv.tax_cents)) : null,
-      inv.tip_cents ? moneyLine('Tip', money(inv.tip_cents)) : null,
-      moneyLine('Total', money(inv.total_cents), { total: true })
+        moneyLine('Total', money(inv.total_cents), { total: true })
     ),
 
     h('div', { class: 'card' },
@@ -2209,7 +2206,6 @@ async function renderBusinessSettings() {
   const timezone = h('input', { type: 'text', value: s.timezone, maxlength: 60 });
   const tax = h('input', { type: 'number', value: (Number(s.tax_rate_bp) / 100).toFixed(2), min: 0, max: 30, step: 0.01 });
   const trackingMinutes = h('input', { type: 'number', value: s.tracking_minutes, min: 5, max: data.tracking_max_minutes, step: 5 });
-  const tips = h('input', { type: 'text', value: s.tip_presets, maxlength: 40 });
   const payInstructions = h('textarea', { value: s.payment_instructions, maxlength: 500 });
   const reviewPrompt = h('textarea', { value: s.review_prompt, maxlength: 300 });
   const invoicePrefix = h('input', { type: 'text', value: s.invoice_prefix, maxlength: 8 });
@@ -2227,7 +2223,6 @@ async function renderBusinessSettings() {
         timezone: timezone.value,
         tax_rate_bp: Math.round(Number(tax.value) * 100),
         tracking_minutes: Number(trackingMinutes.value),
-        tip_presets: tips.value,
         payment_instructions: payInstructions.value,
         review_prompt: reviewPrompt.value,
         invoice_prefix: invoicePrefix.value,
@@ -2263,7 +2258,6 @@ async function renderBusinessSettings() {
     h('div', { class: 'card' },
       h('div', { class: 'card-head' }, h('h2', { text: 'Money' })),
       field('Sales tax %', tax, 'Leave at 0 if you do not charge it.'),
-      field('Tip suggestions %', tips, 'Comma separated, up to four. Customers can always type their own.'),
       field('Invoice prefix', invoicePrefix),
       field('How to pay', payInstructions, 'Shown on the customer\'s invoice.')
     ),

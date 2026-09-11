@@ -1,5 +1,5 @@
 import {
-  h, mount, api, ApiError, money, price, toast, sheet, field, moneyLine, moneyInput,
+  h, mount, api, ApiError, money, price, toast, sheet, field, moneyLine,
   fmtCountdown, fmtDistance, fmtDuration, setTimezone, icon, stars,
 } from '../shared/ui.js';
 
@@ -62,9 +62,13 @@ function render() {
     ),
 
     arrivalSlot,
-    detailsCard(),
+    /* Order matters here. They see what they are booked in for, then what is
+       worth adding — high enough to notice without scrolling, low enough that
+       the page is not selling before it has said hello. The where-and-when
+       sits below both, because the date and time are already in the header. */
     includedCard(),
     offersCard(),
+    detailsCard(),
     photosCard(),
     invoiceCard(),
     reviewCard(),
@@ -288,7 +292,7 @@ function photosCard() {
   );
 }
 
-/* ---- invoice, tip and paying ---- */
+/* ---- invoice and paying ---- */
 
 function invoiceCard() {
   const inv = data.invoice;
@@ -304,14 +308,12 @@ function invoiceCard() {
     ...inv.items.map((item) => moneyLine(item.label, money(item.amount_cents))),
     inv.discount_cents ? moneyLine('Discount', `−${money(inv.discount_cents)}`) : null,
     inv.tax_cents ? moneyLine('Tax', money(inv.tax_cents)) : null,
-    inv.tip_cents ? moneyLine('Tip', money(inv.tip_cents)) : null,
     moneyLine('Total', money(inv.total_cents), { total: true }),
     inv.paid_cents ? moneyLine('Paid', `−${money(inv.paid_cents)}`) : null,
 
     settled
       ? h('p', { class: 'small muted', style: { marginTop: '12px' }, text: 'Nothing owing. Thanks very much.' })
       : h('div', {},
-          inv.can_tip ? tipSection(inv) : null,
           data.business.payment_instructions
             ? h('p', { class: 'small muted', style: { marginTop: '14px' }, text: data.business.payment_instructions })
             : null,
@@ -321,65 +323,6 @@ function invoiceCard() {
           })
         )
   );
-}
-
-function tipSection(inv) {
-  const base = inv.subtotal_cents - inv.discount_cents;
-  const presets = inv.tip_presets || [];
-
-  const row = h('div', { class: 'tip-row' });
-  const paint = () => mount(row,
-    ...presets.map((pct) => {
-      const cents = Math.round((base * pct) / 100);
-      return h('button', {
-        class: `tip-btn${inv.tip_cents === cents && cents > 0 ? ' on' : ''}`,
-        onClick: () => saveTip(cents),
-      },
-        h('span', { class: 'tip-pct', text: `${pct}%` }),
-        h('span', { class: 'tip-amt', text: money(cents) })
-      );
-    }),
-    h('button', {
-      class: `tip-btn${inv.tip_cents > 0 && !presets.some((p) => Math.round((base * p) / 100) === inv.tip_cents) ? ' on' : ''}`,
-      onClick: () => customTipSheet(inv),
-    },
-      h('span', { class: 'tip-pct', text: inv.tip_cents > 0 ? money(inv.tip_cents) : 'Other' }),
-      h('span', { class: 'tip-amt', text: inv.tip_cents > 0 ? 'change' : 'or none' })
-    )
-  );
-  paint();
-
-  return h('div', { style: { marginTop: '18px' } },
-    h('div', { class: 'field-label', text: 'Add a tip?' }),
-    row,
-    h('p', { class: 'no-pressure', style: { marginTop: '10px' },
-      text: inv.tip_cents > 0 ? 'Thank you — genuinely.' : 'Completely optional, and never assumed.' })
-  );
-}
-
-async function saveTip(cents) {
-  try {
-    data = await api.post(`/api/portal/${encodeURIComponent(TOKEN)}/tip`, { tip_cents: cents });
-    render();
-    bumpTotal();
-  } catch (err) { toast(err.message, { bad: true }); }
-}
-
-function customTipSheet(inv) {
-  return sheet({
-    title: 'Tip amount',
-    subtitle: 'Anything you like, including nothing at all.',
-    build: ({ close }) => {
-      const input = moneyInput(inv.tip_cents);
-      return h('div', {},
-        field('Amount', input),
-        h('div', { class: 'sheet-actions' },
-          h('button', { class: 'btn btn--ghost', text: 'No tip', onClick: () => { close(); saveTip(0); } }),
-          h('button', { class: 'btn btn--gold', text: 'Add it', onClick: () => { close(); saveTip(input.getCents()); } })
-        )
-      );
-    },
-  });
 }
 
 const METHODS = [

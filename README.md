@@ -13,7 +13,7 @@ server, so it is not on the Pages site:
 
 | App | Where | What it does |
 |---|---|---|
-| **Graceful Auto Detailing** | [`graceful-auto-detailing/`](graceful-auto-detailing/) | A private dashboard for the owner and a link-only page for the customer: appointments, prices and add-ons, texts, "I'm on my way" tracking that expires after an hour, photos, invoices and tips. Node 22 with no dependencies; see [its README](graceful-auto-detailing/README.md). |
+| **Graceful Auto Detailing** | [`graceful-auto-detailing/`](graceful-auto-detailing/) | A private dashboard for the owner and a link-only page for the customer: appointments, prices and add-ons, texts, "I'm on my way" tracking that expires after an hour, photos and invoices. Node 22 with no dependencies; see [its README](graceful-auto-detailing/README.md). |
 
 ---
 
