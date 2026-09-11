@@ -268,7 +268,7 @@ describe('location is never available except while a trip is running', () => {
     const customer = makeClient(ctx.base);
     const view = await customer.get(`/api/portal/${S.token}`);
     assert.equal(view.data.tracking.live, false);
-    assert.equal(view.data.tracking.has_position, false);
+    assert.ok(!('position' in view.data.tracking), 'no position field at all when nothing is running');
     const tracking = await customer.get(`/api/portal/${S.token}/tracking`);
     assert.equal(tracking.data.live, false);
     assert.ok(!('position' in tracking.data));
@@ -290,6 +290,9 @@ describe('location is never available except while a trip is running', () => {
     const shouldHold = [
       () => makeClient(ctx.base).raw('GET', `/api/track/${trackToken}`, { json: false }),
       () => customer.raw('GET', `/api/portal/${S.token}/tracking`, { json: false }),
+      /* The customer's own appointment page carries it too, so the ETA is
+         there on the first paint. Same token, same appointment, same rule. */
+      () => customer.raw('GET', `/api/portal/${S.token}`, { json: false }),
     ];
 
     const shouldNotHold = [
@@ -307,7 +310,6 @@ describe('location is never available except while a trip is running', () => {
       () => admin.raw('GET', '/api/admin/reviews', { json: false }),
       () => admin.raw('GET', '/api/admin/settings', { json: false }),
       () => admin.raw('GET', '/api/admin/activity', { json: false }),
-      () => customer.raw('GET', `/api/portal/${S.token}`, { json: false }),
       () => makeClient(ctx.base).raw('GET', '/healthz', { json: false }),
     ];
 

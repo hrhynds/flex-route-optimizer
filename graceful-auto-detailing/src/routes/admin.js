@@ -1,6 +1,6 @@
 import { readFile } from 'node:fs/promises';
 import config from '../config.js';
-import { q, tx, allSettings, getSetting, setSetting, SETTING_DEFAULTS, audit } from '../db.js';
+import { q, tx, allSettings, setSetting, SETTING_DEFAULTS, audit } from '../db.js';
 import { Router, readJson, readBody, sendJson, send, bad, notFound, forbidden, conflict } from '../http.js';
 import * as v from '../validate.js';
 import {
@@ -13,8 +13,8 @@ import {
   customerOf, vehicleOf, photosOf,
 } from '../appointments.js';
 import {
-  createPortalLink, ensurePortalLink, revokePortalLinks, publicUrl,
-  startTrip, endTrip, recordPing, liveTripForAppointment, tripTrail, trackingMinutes,
+  createPortalLink, revokePortalLinks,
+  startTrip, endTrip, recordPing, liveTripForAppointment, trackingMinutes,
 } from '../links.js';
 import {
   appointmentTotals, getInvoice, getInvoiceById, buildInvoice, recalcInvoice, issueInvoice,
@@ -23,7 +23,7 @@ import {
 import { savePhoto, getPhoto, photoPath, deletePhoto, PHOTO_KINDS } from '../photos.js';
 import {
   sendSms, renderTemplate, buildVars, getTemplate, PLACEHOLDERS, unknownPlaceholders,
-  SMS_MAX_LENGTH, vehicleLabel,
+  SMS_MAX_LENGTH,
 } from '../sms.js';
 
 export const router = new Router();
@@ -611,6 +611,20 @@ router.patch('/api/admin/appointments/:id', guard(async ({ req, res, params, act
     `UPDATE appointments SET ${keys.map((k) => `${k} = ?`).join(', ')}, updated_at = ? WHERE id = ?`,
     ...keys.map((k) => patch[k]), Date.now(), apptId
   );
+
+  /* Dropping the destination pin part-way through a trip should show up on the
+     customer's map straight away rather than waiting for the next journey. */
+  if ('lat' in patch || 'lng' in patch || 'address' in patch) {
+    const trip = liveTripForAppointment(apptId);
+    if (trip) {
+      const fresh = loadAppointment(apptId);
+      q.run(
+        'UPDATE trips SET dest_lat = ?, dest_lng = ?, dest_label = ? WHERE id = ?',
+        fresh.lat, fresh.lng, fresh.address, trip.id
+      );
+    }
+  }
+
   audit(actor, 'appointment.update', 'appointment', apptId, keys.join(','));
   ok(req, res, { appointment: adminView(loadAppointment(apptId)) });
 }));

@@ -27,13 +27,21 @@ const PAGES = {
 const pageRouter = new Router();
 
 pageRouter.get('/', async (req, res) => servePage(req, res, PAGES.landing));
+/* Only the bare path serves the dashboard shell. Everything else under
+   /admin/ is a real file — the app routes itself with the hash, so a deeper
+   path is never a page. */
 pageRouter.get('/admin', async (req, res) => servePage(req, res, PAGES.admin));
-pageRouter.get('/admin/:rest', async (req, res) => servePage(req, res, PAGES.admin));
 pageRouter.get('/p/:token', async (req, res, params) => {
   if (!isTokenShape(params.token)) throw notFound();
   servePage(req, res, PAGES.portal);
 });
 pageRouter.get('/t/:token', async (req, res, params) => {
+  if (!isTokenShape(params.token)) throw notFound();
+  servePage(req, res, PAGES.track);
+});
+/* The same map, reached from a customer's own appointment page rather than
+   from the tracking text, so there is no second link to pass around. */
+pageRouter.get('/m/:token', async (req, res, params) => {
   if (!isTokenShape(params.token)) throw notFound();
   servePage(req, res, PAGES.track);
 });

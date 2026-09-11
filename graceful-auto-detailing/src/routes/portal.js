@@ -1,7 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import config from '../config.js';
 import { q, allSettings, getSetting, portalEvent, audit } from '../db.js';
-import { Router, readJson, sendJson, send, bad, notFound, forbidden, conflict } from '../http.js';
+import { Router, readJson, sendJson, send, notFound, forbidden, conflict } from '../http.js';
 import * as v from '../validate.js';
 import { clientIp, rateLimit, sameOrigin } from '../security.js';
 import { resolvePortalToken, touchPortalLink, liveTripForAppointment, publicTripState, countTripView } from '../links.js';
@@ -144,14 +144,11 @@ function buildPortalPayload(appointment, link, token) {
       can_tip: invoice.status === 'sent',
       tip_presets: tipPresets(),
     } : null,
-    /* Present only while the owner has a trip running. When nothing is live
-       this is null — there is no field here that could leak a position. */
-    tracking: trip ? {
-      live: true,
-      expires_at: trip.expires_at,
-      has_position: trip.last_lat != null,
-      url: null,
-    } : { live: false, expires_at: null, has_position: false, url: null },
+    /* Present only while the owner has a trip running, and then it is exactly
+       what the tracking endpoint returns — one shape, one decision about what
+       a customer may see, so the first paint already has the ETA. When nothing
+       is live this is a bare { live: false } with no position field at all. */
+    tracking: trip ? publicTripState(trip, { now }) : { live: false },
     review: review ? { rating: review.rating, comment: review.comment, created_at: review.created_at } : null,
     link: { expires_at: link.expires_at },
   };

@@ -232,6 +232,10 @@ describe('"I am on my way"', () => {
     assert.equal(tracking.data.live, false);
     assert.ok(!('position' in tracking.data), 'no position field at all when nothing is running');
 
+    const page = await S.customerClient.get(`/api/portal/${S.portalToken}`);
+    assert.equal(page.data.tracking.live, false);
+    assert.ok(!('position' in page.data.tracking), 'the appointment page carries no position either');
+
     const { q } = await import('../src/db.js');
     assert.equal(q.pluck('SELECT COUNT(*) AS n FROM trip_pings'), 0);
     assert.equal(q.pluck('SELECT COUNT(*) AS n FROM trips'), 0);

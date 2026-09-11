@@ -1,0 +1,12 @@
+{
+  "name": "Graceful Auto Detailing — Owner",
+  "short_name": "Graceful",
+  "description": "Private dashboard for Graceful Auto Detailing.",
+  "start_url": "/admin",
+  "scope": "/admin",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#0b0f15",
+  "theme_color": "#0b0f15",
+  "icons": [{ "src": "/shared/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }]
+}

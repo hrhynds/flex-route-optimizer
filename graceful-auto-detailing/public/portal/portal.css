@@ -1,0 +1,142 @@
+/* ==========================================================================
+   The customer's page — calm, unhurried, nothing to sign up for
+   ========================================================================== */
+
+.boot-splash { display: grid; place-items: center; min-height: 70dvh; color: var(--text-faint); }
+
+.portal-top {
+  padding: calc(var(--safe-top) + 26px) 0 4px;
+  text-align: center;
+}
+.portal-top .biz-mark {
+  width: 50px; height: 50px; border-radius: 15px; margin: 0 auto 14px;
+  background: linear-gradient(140deg, var(--accent) 0%, var(--accent-deep) 100%);
+  display: grid; place-items: center; color: #04201e; font-weight: 800; font-size: 1.1rem;
+  box-shadow: var(--shadow-sm);
+}
+.portal-top .biz-name { font-size: 0.86rem; font-weight: 650; color: var(--text-dim); letter-spacing: 0.01em; }
+.portal-top .greeting {
+  font-size: 1.5rem; font-weight: 720; letter-spacing: -0.035em; margin-top: 10px; line-height: 1.2;
+}
+.portal-top .when { color: var(--text-dim); font-size: 0.95rem; margin-top: 7px; }
+.portal-top .status-line { margin-top: 14px; }
+
+/* ---- arrival ---- */
+
+.arrival {
+  margin-top: 16px; padding: 17px 18px;
+  border-radius: var(--radius);
+  background: linear-gradient(140deg, var(--live-soft) 0%, var(--surface) 78%);
+  border: 1px solid color-mix(in srgb, var(--live) 45%, var(--line));
+}
+.arrival .arrival-top { display: flex; align-items: center; gap: 9px; }
+.arrival .arrival-title { font-weight: 700; font-size: 1.02rem; flex: 1; letter-spacing: -0.015em; }
+.arrival .arrival-eta { font-size: 2rem; font-weight: 740; letter-spacing: -0.04em; margin-top: 10px; }
+.arrival .arrival-eta .unit { font-size: 0.95rem; font-weight: 620; color: var(--text-dim); margin-left: 5px; letter-spacing: 0; }
+.arrival .arrival-sub { color: var(--text-dim); font-size: 0.87rem; margin-top: 3px; }
+
+/* ---- what you are getting ---- */
+
+.line-item {
+  display: flex; align-items: flex-start; gap: 14px;
+  padding: 14px 0; border-bottom: 1px solid var(--line-soft);
+}
+.line-item:last-child { border-bottom: none; }
+.line-item .line-main { flex: 1; min-width: 0; }
+.line-item .line-name { font-weight: 620; font-size: 0.95rem; }
+.line-item .line-desc { font-size: 0.83rem; color: var(--text-dim); margin-top: 4px; line-height: 1.5; }
+.line-item .line-price { font-weight: 650; font-variant-numeric: tabular-nums; flex: none; }
+.line-item .line-from { font-size: 0.7rem; color: var(--text-faint); font-weight: 600; display: block; text-align: right; }
+.line-item .line-yours {
+  display: inline-block; margin-top: 6px; font-size: 0.72rem;
+  color: var(--accent); font-weight: 650;
+}
+
+/* ---- optional extras ---- */
+
+.offer {
+  display: flex; align-items: flex-start; gap: 14px; width: 100%; text-align: left;
+  padding: 15px 16px; margin-top: 10px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--line);
+  background: var(--surface-2);
+  transition: border-color 0.15s ease, transform 0.08s ease;
+}
+.offer:active { transform: scale(0.99); }
+.offer:hover { border-color: color-mix(in srgb, var(--accent) 45%, var(--line)); }
+.offer .offer-main { flex: 1; min-width: 0; }
+.offer .offer-name { font-weight: 620; font-size: 0.94rem; }
+.offer .offer-desc { font-size: 0.83rem; color: var(--text-dim); margin-top: 5px; line-height: 1.55; }
+.offer .offer-end { flex: none; text-align: right; }
+.offer .offer-price { font-weight: 680; font-variant-numeric: tabular-nums; }
+.offer .offer-from { display: block; font-size: 0.68rem; color: var(--text-faint); font-weight: 650; }
+.offer .offer-add {
+  display: inline-block; margin-top: 8px; padding: 5px 12px;
+  border-radius: 999px; background: var(--accent-soft); color: var(--accent);
+  font-size: 0.76rem; font-weight: 700;
+}
+
+.no-pressure {
+  text-align: center; font-size: 0.81rem; color: var(--text-faint);
+  margin-top: 16px; line-height: 1.55;
+}
+
+/* ---- total bar ---- */
+
+.total-bar {
+  position: sticky; bottom: 0; z-index: 20;
+  margin: 18px -16px 0;
+  padding: 14px 16px calc(14px + var(--safe-bottom));
+  background: color-mix(in srgb, var(--ink) 92%, transparent);
+  backdrop-filter: saturate(170%) blur(16px);
+  -webkit-backdrop-filter: saturate(170%) blur(16px);
+  border-top: 1px solid var(--line);
+  display: flex; align-items: center; justify-content: space-between; gap: 14px;
+}
+.total-bar .total-label { font-size: 0.78rem; color: var(--text-dim); font-weight: 600; }
+.total-bar .total-value {
+  font-size: 1.42rem; font-weight: 740; letter-spacing: -0.035em; font-variant-numeric: tabular-nums;
+  transition: color 0.25s ease;
+}
+.total-bar .total-value.bump { color: var(--accent); }
+.total-bar .total-note { font-size: 0.72rem; color: var(--text-faint); }
+
+/* ---- photos ---- */
+
+.before-after { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 12px; }
+.ba-col .ba-label {
+  font-size: 0.7rem; font-weight: 700; letter-spacing: 0.09em; text-transform: uppercase;
+  color: var(--text-faint); margin-bottom: 7px; text-align: center;
+}
+.ba-col img { border-radius: var(--radius-sm); aspect-ratio: 1; object-fit: cover; width: 100%; }
+.ba-col img + img { margin-top: 8px; }
+
+/* ---- tip ---- */
+
+.tip-row { display: flex; gap: 8px; margin-top: 12px; }
+.tip-row .tip-btn {
+  flex: 1; min-height: 56px; border-radius: var(--radius-sm);
+  border: 1px solid var(--line); background: var(--surface-2);
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 1px;
+}
+.tip-row .tip-btn.on { border-color: var(--gold); background: var(--gold-soft); }
+.tip-row .tip-pct { font-weight: 700; font-size: 0.95rem; }
+.tip-row .tip-amt { font-size: 0.72rem; color: var(--text-faint); font-variant-numeric: tabular-nums; }
+.tip-row .tip-btn.on .tip-pct { color: var(--gold); }
+
+/* ---- stars ---- */
+
+.stars { display: flex; gap: 6px; justify-content: center; margin: 14px 0 6px; }
+.stars button {
+  font-size: 2.1rem; line-height: 1; color: var(--surface-3);
+  transition: transform 0.12s ease, color 0.12s ease;
+}
+.stars button.lit { color: var(--gold); }
+.stars button:active { transform: scale(1.16); }
+
+/* ---- expired ---- */
+
+.gone { text-align: center; padding: 16dvh 20px; }
+.gone .gone-emoji { font-size: 2.6rem; display: block; margin-bottom: 16px; }
+.gone h1 { font-size: 1.25rem; font-weight: 700; letter-spacing: -0.02em; }
+.gone p { color: var(--text-dim); font-size: 0.92rem; margin-top: 10px; line-height: 1.6; }

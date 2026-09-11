@@ -1,0 +1,44 @@
+.landing {
+  max-width: 520px;
+  margin: 0 auto;
+  padding: 12dvh 22px calc(40px + var(--safe-bottom));
+  text-align: center;
+}
+
+.landing-mark {
+  width: 64px; height: 64px; border-radius: 19px; margin: 0 auto 22px;
+  background: linear-gradient(140deg, var(--accent) 0%, var(--accent-deep) 100%);
+  display: grid; place-items: center;
+  color: #04201e; font-weight: 800; font-size: 1.4rem; letter-spacing: -0.03em;
+  box-shadow: var(--shadow);
+}
+
+.landing h1 {
+  font-size: 1.72rem; font-weight: 740; letter-spacing: -0.04em; line-height: 1.15;
+}
+
+.landing-lead {
+  color: var(--text-dim); font-size: 1rem; line-height: 1.62; margin-top: 14px;
+}
+
+.landing-points {
+  list-style: none; text-align: left; margin-top: 30px;
+  border: 1px solid var(--line); border-radius: var(--radius);
+  background: var(--surface); overflow: hidden;
+}
+.landing-points li {
+  display: flex; gap: 13px; align-items: flex-start;
+  padding: 15px 17px; font-size: 0.9rem; line-height: 1.55;
+  border-bottom: 1px solid var(--line-soft);
+}
+.landing-points li:last-child { border-bottom: none; }
+.landing-points span { font-size: 1.1rem; flex: none; line-height: 1.35; }
+
+.landing-lost { margin-top: 26px; font-size: 0.87rem; color: var(--text-faint); line-height: 1.6; }
+
+.landing-owner {
+  display: inline-block; margin-top: 34px;
+  font-size: 0.82rem; font-weight: 600; color: var(--text-faint);
+  padding: 10px 16px; border-radius: 999px; border: 1px solid var(--line-soft);
+}
+.landing-owner:hover { color: var(--text-dim); text-decoration: none; border-color: var(--line); }

@@ -1,0 +1,100 @@
+/* ==========================================================================
+   The arrival map
+
+   Drawn here rather than pulled from a tile service: no third party learns
+   who is watching, who is driving, or where either of them is.
+   ========================================================================== */
+
+.boot-splash { display: grid; place-items: center; min-height: 70dvh; color: var(--text-faint); }
+
+.track-page { display: flex; flex-direction: column; min-height: 100dvh; }
+
+.map-wrap {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 46dvh;
+  overflow: hidden;
+  background:
+    radial-gradient(120% 90% at 50% 0%, color-mix(in srgb, var(--accent) 9%, transparent) 0%, transparent 62%),
+    var(--surface);
+  border-bottom: 1px solid var(--line);
+}
+
+/* A faint grid that reads as "map" without pretending to be streets. */
+.map-wrap::before {
+  content: '';
+  position: absolute; inset: -20%;
+  background-image:
+    linear-gradient(to right, var(--line-soft) 1px, transparent 1px),
+    linear-gradient(to bottom, var(--line-soft) 1px, transparent 1px);
+  background-size: 46px 46px;
+  opacity: 0.55;
+  mask-image: radial-gradient(90% 80% at 50% 45%, #000 45%, transparent 100%);
+  -webkit-mask-image: radial-gradient(90% 80% at 50% 45%, #000 45%, transparent 100%);
+}
+
+.map-svg { position: absolute; inset: 0; width: 100%; height: 100%; }
+
+.map-overlay {
+  position: absolute; left: 0; right: 0; top: 0;
+  padding: calc(var(--safe-top) + 14px) 16px 0;
+  display: flex; align-items: flex-start; justify-content: space-between; gap: 12px;
+  pointer-events: none;
+}
+.map-chip {
+  padding: 7px 13px; border-radius: 999px;
+  background: color-mix(in srgb, var(--ink) 78%, transparent);
+  backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+  border: 1px solid var(--line);
+  font-size: 0.78rem; font-weight: 620;
+  display: inline-flex; align-items: center; gap: 7px;
+}
+.map-chip--live { color: var(--live); }
+
+.map-stale {
+  position: absolute; left: 50%; bottom: 16px; transform: translateX(-50%);
+  padding: 8px 14px; border-radius: 999px;
+  background: color-mix(in srgb, var(--ink) 82%, transparent);
+  border: 1px solid color-mix(in srgb, var(--warn) 40%, var(--line));
+  color: var(--warn); font-size: 0.76rem; font-weight: 620;
+  backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+}
+
+/* ---- the panel underneath ---- */
+
+.track-panel {
+  flex: none;
+  padding: 20px 16px calc(22px + var(--safe-bottom));
+  background: var(--ink);
+}
+.track-panel .who { font-size: 0.8rem; color: var(--text-dim); font-weight: 620; }
+.track-panel .eta {
+  font-size: 2.9rem; font-weight: 760; letter-spacing: -0.045em; line-height: 1.05; margin-top: 5px;
+}
+.track-panel .eta .unit {
+  font-size: 1rem; font-weight: 620; color: var(--text-dim); letter-spacing: 0; margin-left: 8px;
+}
+.track-panel .facts {
+  display: flex; gap: 10px; flex-wrap: wrap; margin-top: 14px;
+}
+.track-panel .expiry {
+  margin-top: 18px; padding: 13px 15px;
+  border-radius: var(--radius-sm);
+  background: var(--surface); border: 1px solid var(--line);
+  font-size: 0.81rem; color: var(--text-dim); line-height: 1.55;
+}
+.track-panel .expiry strong { color: var(--text); font-weight: 650; }
+.track-panel .actions { display: flex; gap: 10px; margin-top: 16px; }
+.track-panel .actions > * { flex: 1; }
+
+/* ---- ended ---- */
+
+.ended { text-align: center; padding: 16dvh 22px; }
+.ended .ended-emoji { font-size: 2.6rem; display: block; margin-bottom: 16px; }
+.ended h1 { font-size: 1.28rem; font-weight: 720; letter-spacing: -0.025em; }
+.ended p { color: var(--text-dim); font-size: 0.93rem; margin-top: 11px; line-height: 1.6; }
+.ended .btn { margin-top: 22px; }
+
+@media (min-width: 720px) {
+  .track-page { max-width: 680px; margin: 0 auto; border-inline: 1px solid var(--line); }
+}
