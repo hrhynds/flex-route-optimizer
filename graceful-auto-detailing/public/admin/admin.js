@@ -37,6 +37,15 @@ async function boot() {
   await startApp();
 }
 
+/* An error explains the attempt that produced it. The moment anything is
+   typed it stops being true, so it goes — otherwise a message left over from
+   a previous try reads as the answer to this one. This matters because the
+   browser's own validation can block a submit without our code ever running. */
+function clearOnEdit(form, errorBox) {
+  form.addEventListener('input', () => { errorBox.hidden = true; }, { capture: true });
+  return form;
+}
+
 function gateShell(...children) {
   tabbar.hidden = true;
   mount(app, h('div', { class: 'gate' },
@@ -73,6 +82,8 @@ function renderLogin(message) {
     errorBox,
     h('div', { style: { marginTop: '18px' } }, submit)
   );
+
+  clearOnEdit(form, errorBox);
 
   gateShell(
     h('h1', { text: state.boot?.business_name || 'Graceful Auto Detailing' }),
@@ -118,6 +129,8 @@ function renderSetup() {
     field('Password', pass, 'At least 12 characters. A short sentence works well.'),
     h('div', { style: { marginTop: '18px' } }, submit)
   );
+
+  clearOnEdit(form, errorBox);
 
   gateShell(
     h('h1', { text: 'Set up your dashboard' }),

@@ -19,7 +19,11 @@ export const unauthorized = (msg = 'Sign in to continue.') => new HttpError(401,
 export const forbidden = (msg = 'Not allowed.') => new HttpError(403, msg);
 export const notFound = (msg = 'Not found.') => new HttpError(404, msg);
 export const conflict = (msg) => new HttpError(409, msg);
-export const tooMany = (msg = 'Too many attempts. Try again shortly.') => new HttpError(429, msg);
+export const tooMany = (msg = 'Too many attempts. Try again shortly.', retryAfterSec = null) => {
+  const err = new HttpError(429, msg);
+  if (retryAfterSec) err.retryAfterSec = retryAfterSec;
+  return err;
+};
 
 /* ---------- responses ---------- */
 

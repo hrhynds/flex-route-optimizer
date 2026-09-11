@@ -1,7 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import config from '../config.js';
 import { q, tx, allSettings, setSetting, SETTING_DEFAULTS, audit } from '../db.js';
-import { Router, readJson, readBody, sendJson, send, bad, notFound, forbidden, conflict } from '../http.js';
+import { Router, readJson, readBody, sendJson, send, bad, notFound, forbidden, conflict, tooMany } from '../http.js';
 import * as v from '../validate.js';
 import {
   requireOwner, requireCsrf, login, logout, ownerCount, ensureSetupCode, checkSetupCode,
@@ -74,7 +74,7 @@ router.get('/api/admin/bootstrap', async (req, res) => {
 router.post('/api/admin/setup', async (req, res) => {
   if (ownerCount() > 0) throw forbidden('Setup is already complete.');
   const limit = rateLimit(`setup:${clientIp(req)}`, { limit: 10, windowMs: 15 * 60 * 1000 });
-  if (!limit.ok) throw Object.assign(new Error('Too many attempts.'), { status: 429 });
+  if (!limit.ok) throw tooMany('Too many setup attempts. Wait a few minutes.', limit.retryAfterSec);
 
   const body = await readJson(req);
   checkSetupCode(body.code);

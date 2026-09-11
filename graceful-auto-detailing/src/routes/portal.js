@@ -1,7 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import config from '../config.js';
 import { q, allSettings, getSetting, portalEvent, audit } from '../db.js';
-import { Router, readJson, sendJson, send, notFound, forbidden, conflict } from '../http.js';
+import { Router, readJson, sendJson, send, notFound, forbidden, conflict, tooMany } from '../http.js';
 import * as v from '../validate.js';
 import { clientIp, rateLimit, sameOrigin } from '../security.js';
 import { resolvePortalToken, touchPortalLink, liveTripForAppointment, publicTripState, countTripView } from '../links.js';
@@ -25,11 +25,7 @@ function portalGuard(handler, { write = false } = {}) {
     /* A link is a bearer token, so guessing is the attack. Rate limit by source
        address before the token is even hashed. */
     const limit = rateLimit(`portal:${ip}`, { limit: write ? 60 : 240, windowMs: 5 * 60 * 1000 });
-    if (!limit.ok) {
-      const err = new Error('Too many requests. Give it a minute.');
-      err.status = 429; err.expose = true; err.retryAfterSec = limit.retryAfterSec;
-      throw err;
-    }
+    if (!limit.ok) throw tooMany('Too many requests. Give it a minute.', limit.retryAfterSec);
 
     if (write && !sameOrigin(req)) throw forbidden('Request blocked: unexpected origin.');
 

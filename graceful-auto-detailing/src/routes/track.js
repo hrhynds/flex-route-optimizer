@@ -1,4 +1,4 @@
-import { Router, sendJson } from '../http.js';
+import { Router, sendJson, tooMany } from '../http.js';
 import { clientIp, rateLimit } from '../security.js';
 import { resolveTripToken, publicTripState, countTripView } from '../links.js';
 
@@ -15,11 +15,7 @@ export const router = new Router();
 
 router.get('/api/track/:token', async (req, res, params) => {
   const limit = rateLimit(`track:${clientIp(req)}`, { limit: 240, windowMs: 5 * 60 * 1000 });
-  if (!limit.ok) {
-    const err = new Error('Too many requests. Give it a minute.');
-    err.status = 429; err.expose = true; err.retryAfterSec = limit.retryAfterSec;
-    throw err;
-  }
+  if (!limit.ok) throw tooMany('Too many requests. Give it a minute.', limit.retryAfterSec);
 
   const trip = resolveTripToken(params.token);
   countTripView(trip.id);

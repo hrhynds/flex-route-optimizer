@@ -523,3 +523,93 @@ describe('the usual web attacks', () => {
     assert.equal(resp.headers.get('access-control-allow-origin'), null);
   });
 });
+
+describe('being hammered is answered properly, not with a server error', () => {
+  test('a flood of tracking requests gets 429 and a Retry-After, never a 500', async () => {
+    const { _clearRateLimits } = await import('../src/security.js');
+    _clearRateLimits();
+
+    const stranger = makeClient(ctx.base);
+    let limited = null;
+    for (let i = 0; i < 260; i += 1) {
+      const resp = await stranger.get(`/api/track/${'q'.repeat(43)}`);
+      assert.notEqual(resp.status, 500, 'a rate limit must never surface as a server error');
+      if (resp.status === 429) { limited = resp; break; }
+    }
+    assert.ok(limited, 'the limiter eventually kicks in');
+    assert.match(limited.data.error, /Too many/i);
+    assert.ok(Number(limited.headers.get('retry-after')) > 0, 'it says when to come back');
+    _clearRateLimits();
+  });
+
+  test('a flood of customer-link requests is limited the same way', async () => {
+    const { _clearRateLimits } = await import('../src/security.js');
+    _clearRateLimits();
+
+    const stranger = makeClient(ctx.base);
+    let limited = null;
+    for (let i = 0; i < 260; i += 1) {
+      const resp = await stranger.get(`/api/portal/${'w'.repeat(43)}`);
+      assert.notEqual(resp.status, 500);
+      if (resp.status === 429) { limited = resp; break; }
+    }
+    assert.ok(limited, 'the limiter eventually kicks in');
+    assert.ok(Number(limited.headers.get('retry-after')) > 0);
+    _clearRateLimits();
+  });
+});
+
+describe('a session is only as good as the cookie that carries it', () => {
+  test('a tampered session cookie is worth nothing', async () => {
+    const real = admin.cookies.get('gad_session');
+    const tampered = makeClient(ctx.base);
+    /* Flip one character of a genuine token. */
+    const flipped = real.slice(0, -1) + (real.endsWith('A') ? 'B' : 'A');
+    tampered.cookies.set('gad_session', flipped);
+    tampered.cookies.set('gad_csrf', admin.cookies.get('gad_csrf'));
+    assert.equal((await tampered.get('/api/admin/dashboard')).status, 401);
+  });
+
+  test('a CSRF cookie on its own opens nothing', async () => {
+    const halfway = makeClient(ctx.base);
+    halfway.cookies.set('gad_csrf', admin.cookies.get('gad_csrf'));
+    assert.equal((await halfway.get('/api/admin/dashboard')).status, 401);
+  });
+
+  test('signing out kills the session on the server, not just in the browser', async () => {
+    const leaving = makeClient(ctx.base);
+    await leaving.post('/api/admin/login', { email: OWNER.email, password: OWNER.password });
+    const token = leaving.cookies.get('gad_session');
+    assert.equal((await leaving.get('/api/admin/dashboard')).status, 200);
+
+    await leaving.post('/api/admin/logout', {});
+
+    /* Put the cookie back by hand: the session must be gone server-side. */
+    const replay = makeClient(ctx.base);
+    replay.cookies.set('gad_session', token);
+    assert.equal((await replay.get('/api/admin/dashboard')).status, 401);
+  });
+
+  test('an expired session stops working even with a valid cookie', async () => {
+    const stale = makeClient(ctx.base);
+    await stale.post('/api/admin/login', { email: OWNER.email, password: OWNER.password });
+    assert.equal((await stale.get('/api/admin/dashboard')).status, 200);
+    q.run('UPDATE sessions SET expires_at = ?', Date.now() - 1000);
+    assert.equal((await stale.get('/api/admin/dashboard')).status, 401);
+    admin = makeClient(ctx.base);
+    await admin.post('/api/admin/login', { email: OWNER.email, password: OWNER.password });
+  });
+
+  test('a stored password is never a plain password', async () => {
+    const row = q.get('SELECT pass_hash FROM owners LIMIT 1');
+    assert.match(row.pass_hash, /^scrypt\$\d+\$\d+\$\d+\$[A-Za-z0-9_-]+\$[A-Za-z0-9_-]+$/);
+    assert.ok(!row.pass_hash.includes(OWNER.password));
+  });
+
+  test('a malformed stored hash is refused rather than crashing the server', async () => {
+    const { verifyPassword } = await import('../src/security.js');
+    for (const junk of ['', 'not-a-hash', 'scrypt$$$$', 'scrypt$99999999$8$1$AAAA$BBBB', 'bcrypt$1$2$3$4$5']) {
+      assert.equal(await verifyPassword('anything', junk), false, JSON.stringify(junk));
+    }
+  });
+});

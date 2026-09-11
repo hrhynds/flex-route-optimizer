@@ -8,6 +8,13 @@ browser and keep their data on your device.
 | **Flex Route Optimizer** | [`/`](https://hrhynds.github.io/flex-route-optimizer/) | Reads Amazon Flex stop screenshots and builds an optimised driving route. |
 | **Ledger** | [`/bills/`](https://hrhynds.github.io/flex-route-optimizer/bills/) | Money in, money out, and what's genuinely left after a partner's cut, tax and the day's share of the bills. |
 
+A third app lives here too, and it is a different sort of thing — it needs a
+server, so it is not on the Pages site:
+
+| App | Where | What it does |
+|---|---|---|
+| **Graceful Auto Detailing** | [`graceful-auto-detailing/`](graceful-auto-detailing/) | A private dashboard for the owner and a link-only page for the customer: appointments, prices and add-ons, texts, "I'm on my way" tracking that expires after an hour, photos, invoices and tips. Node 22 with no dependencies; see [its README](graceful-auto-detailing/README.md). |
+
 ---
 
 ## Ledger

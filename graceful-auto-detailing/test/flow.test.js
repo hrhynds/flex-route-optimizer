@@ -452,3 +452,50 @@ describe('doing the job and getting paid', () => {
     assert.equal(data.stats.outstanding_cents, 0);
   });
 });
+
+describe('money already agreed does not move under anyone', () => {
+  test('raising a price does not re-price a job that is already booked', async () => {
+    const petHair = S.addons['Pet hair removal'];
+    const before = (await admin.get(`/api/admin/appointments/${S.appt.id}`)).data.appointment.totals;
+
+    await admin.patch(`/api/admin/catalog/addons/${petHair.id}`, { price_cents: 9900 });
+
+    const after = (await admin.get(`/api/admin/appointments/${S.appt.id}`)).data.appointment.totals;
+    const line = after.addons.find((a) => a.name === 'Pet hair removal');
+    assert.equal(line.price_cents, 4000, 'the booked job keeps the price it was sold at');
+    assert.equal(after.subtotal_cents, before.subtotal_cents, 'and the total does not budge');
+
+    /* A new booking, though, gets the new price. */
+    const fresh = await admin.post('/api/admin/appointments', {
+      customer_id: S.customer.id, service_id: S.service.id, starts_at: Date.now() + 86400000,
+      addon_ids: [petHair.id],
+    });
+    const freshLine = fresh.data.appointment.totals.addons[0];
+    assert.equal(freshLine.price_cents, 9900, 'the new job uses the new price');
+
+    await admin.patch(`/api/admin/catalog/addons/${petHair.id}`, { price_cents: 4000 });
+    await admin.del(`/api/admin/appointments/${fresh.data.appointment.id}`);
+  });
+
+  test('an invoice that has gone out cannot be quietly rebuilt', async () => {
+    const { status, data } = await admin.post(`/api/admin/appointments/${S.appt.id}/invoice`, {});
+    assert.equal(status, 409);
+    assert.match(data.error, /already been issued/);
+  });
+
+  test('a paid invoice cannot be voided out from under the payment', async () => {
+    const { status, data } = await admin.post(`/api/admin/invoices/${S.invoice.id}/void`, {});
+    assert.equal(status, 409);
+    assert.match(data.error, /already been recorded/);
+  });
+
+  test('a customer with history is archived rather than deleted', async () => {
+    const { status, data } = await admin.del(`/api/admin/customers/${S.customer.id}`);
+    assert.equal(status, 200);
+    assert.equal(data.archived, true);
+    assert.ok(data.appointments > 0);
+    /* The appointment and its invoice survive. */
+    assert.equal((await admin.get(`/api/admin/appointments/${S.appt.id}`)).status, 200);
+    await admin.patch(`/api/admin/customers/${S.customer.id}`, { archived: false });
+  });
+});

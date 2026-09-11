@@ -12,7 +12,8 @@
     "dev": "node --disable-warning=ExperimentalWarning --watch server.js",
     "owner": "node --disable-warning=ExperimentalWarning scripts/create-owner.js",
     "seed": "node --disable-warning=ExperimentalWarning scripts/seed.js",
-    "test": "node --disable-warning=ExperimentalWarning --test 'test/*.test.js'"
+    "test": "node --disable-warning=ExperimentalWarning --test 'test/*.test.js'",
+    "reset-password": "node --disable-warning=ExperimentalWarning scripts/reset-password.js"
   },
   "dependencies": {}
 }
