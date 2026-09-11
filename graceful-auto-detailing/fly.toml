@@ -1,0 +1,54 @@
+# Fly.io deployment.
+#
+# Two things here are deliberate and should not be relaxed:
+#
+#   * ONE machine, always on. The database is SQLite on a volume and the photos
+#     are files beside it, so a second machine would be a second, diverging
+#     copy of the business. auto_stop_machines is off because a sleeping app
+#     means a tracking link that does not answer and, worse, the timer that
+#     purges expired location data never running.
+#
+#   * force_https. Browsers refuse to share a location outside a secure
+#     context, so "I'm on my way" simply cannot work over plain HTTP.
+
+app = "graceful-auto-detailing"
+primary_region = "ord"          # Chicago — nearest Fly region to Michigan
+
+[build]
+
+[env]
+  NODE_ENV = "production"
+  PORT = "8080"
+  DATA_DIR = "/data"
+  TRUST_PROXY = "1"
+  # CHANGE THIS to the address customers actually reach. Every link texted out
+  # is built on it. The app refuses to start if it is left pointing at localhost.
+  PUBLIC_BASE_URL = "https://graceful-auto-detailing.fly.dev"
+
+[[mounts]]
+  source = "graceful_data"
+  destination = "/data"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_start_machines = true
+  auto_stop_machines = false
+  min_machines_running = 1
+
+  [http_service.concurrency]
+    type = "requests"
+    soft_limit = 200
+    hard_limit = 250
+
+[[http_service.checks]]
+  method = "GET"
+  path = "/healthz"
+  interval = "30s"
+  timeout = "5s"
+  grace_period = "10s"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "512mb"
+  cpus = 1

@@ -1,0 +1,54 @@
+# Self-hosting on a VPS. Caddy sits in front and gets a TLS certificate on its
+# own, which matters: without HTTPS the browser will not share a location and
+# "I'm on my way" cannot work.
+#
+#   1. Point an A record at this box, e.g. app.yourdomain.com
+#   2. Put your domain and a secret in .env beside this file (see .env.example)
+#   3. docker compose up -d
+
+services:
+  app:
+    build: .
+    image: graceful-auto-detailing:latest
+    restart: unless-stopped
+    init: true
+    environment:
+      NODE_ENV: production
+      DATA_DIR: /data
+      PORT: "8080"
+      TRUST_PROXY: "1"
+      PUBLIC_BASE_URL: https://${APP_DOMAIN:?set APP_DOMAIN in .env}
+      APP_SECRET: ${APP_SECRET:?set APP_SECRET in .env}
+      TWILIO_ACCOUNT_SID: ${TWILIO_ACCOUNT_SID:-}
+      TWILIO_AUTH_TOKEN: ${TWILIO_AUTH_TOKEN:-}
+      TWILIO_FROM: ${TWILIO_FROM:-}
+    volumes:
+      - graceful-data:/data
+    expose:
+      - "8080"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8080/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    depends_on:
+      - app
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      APP_DOMAIN: ${APP_DOMAIN:?set APP_DOMAIN in .env}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+
+volumes:
+  graceful-data:
+  caddy-data:
+  caddy-config:

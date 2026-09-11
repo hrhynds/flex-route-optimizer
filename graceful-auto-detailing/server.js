@@ -145,6 +145,27 @@ export function startSweeper(everyMs = 60_000) {
 async function main() {
   initDb();
 
+  /* Every customer link and tracking link is built on PUBLIC_BASE_URL. Getting
+     it wrong in production means texting people links to a host that is not
+     this one, which is worth shouting about rather than discovering later. */
+  if (config.env === 'production') {
+    const base = config.publicBaseUrl;
+    if (/localhost|127\.0\.0\.1|0\.0\.0\.0/.test(base)) {
+      console.error('');
+      console.error('  PUBLIC_BASE_URL is still ' + base + '.');
+      console.error('  Every link texted to a customer would point there and not work.');
+      console.error('  Set it to the address customers actually reach, e.g. https://app.yourdomain.com');
+      console.error('');
+      process.exit(1);
+    }
+    if (!base.startsWith('https://')) {
+      console.warn('');
+      console.warn('  PUBLIC_BASE_URL is not https. Browsers refuse to share a location');
+      console.warn('  outside a secure context, so "I\'m on my way" will not work.');
+      console.warn('');
+    }
+  }
+
   if (ownerCount() === 0) {
     if (config.ownerEmail && config.ownerPassword) {
       const { createOwner } = await import('./src/auth.js');

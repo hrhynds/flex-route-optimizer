@@ -169,6 +169,10 @@ gate than an inbox.
 
 ## Deploying
 
+**[DEPLOY.md](DEPLOY.md) walks through it step by step.** The short version is
+`fly launch --no-deploy`, create a volume, set `APP_SECRET`, `fly deploy` — or
+`docker compose up -d` on your own box, where Caddy handles the certificate.
+
 Put it behind HTTPS. Two reasons, both hard requirements rather than advice:
 
 1. Browsers refuse `navigator.geolocation` outside a secure context, so

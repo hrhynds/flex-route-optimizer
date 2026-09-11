@@ -13,7 +13,9 @@
     "owner": "node --disable-warning=ExperimentalWarning scripts/create-owner.js",
     "seed": "node --disable-warning=ExperimentalWarning scripts/seed.js",
     "test": "node --disable-warning=ExperimentalWarning --test 'test/*.test.js'",
-    "reset-password": "node --disable-warning=ExperimentalWarning scripts/reset-password.js"
+    "reset-password": "node --disable-warning=ExperimentalWarning scripts/reset-password.js",
+    "backup": "node --disable-warning=ExperimentalWarning scripts/backup.js",
+    "restore": "node --disable-warning=ExperimentalWarning scripts/restore.js"
   },
   "dependencies": {}
 }
