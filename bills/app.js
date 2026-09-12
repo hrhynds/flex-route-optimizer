@@ -22,7 +22,7 @@
 
   var STORE_KEY = 'billcushion.v1';
   var BACKUP_KEY = 'billcushion.lastgood';   // the state as of the last clean open
-  var APP_VERSION = '2026.09.12c';            // bump when shipping; shown under More
+  var APP_VERSION = '2026.09.12d';            // bump when shipping; shown under More
   var MS_DAY = 86400000;
   var DOW_LONG = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
   var DOW_MID = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
@@ -751,7 +751,10 @@
         if (left <= 0.004) return;
         var already = 0;
         alloc.forEach(function (a) { if (a.billId === s.bill.id) already = a.amount; });
-        var room = round2(s.remaining - sumOn(s.bill, iso) - already);
+        // s.remaining is already net of everything banked today, so taking
+        // today's entries off again double-counts them — and once a correction
+        // can be negative, double-counting it *adds* room that is not there.
+        var room = round2(s.remaining - already);
         if (room <= 0.004) return;
         var g = Math.min(room, left);
         give(s.bill.id, g);
@@ -1281,6 +1284,62 @@
     return added;
   }
 
+  /**
+   * Make the app's bill money match what is actually in the bank.
+   *
+   * The ledger drifts: money gets spent, a day goes unlogged, a transfer is
+   * rounded. Rather than argue with reality, take the real figure and record
+   * the difference.
+   *
+   * Extra goes in the way any money does — nearest due date first. A shortfall
+   * comes back off in the opposite order, furthest due date first, so the bills
+   * landing soonest keep their funding and the pain lands on the ones with the
+   * most time to recover.
+   */
+  function reconcileTo(actual, note) {
+    var have = vaultTotal();
+    var diff = round2(actual - have);
+    if (Math.abs(diff) <= 0.004) return { diff: 0, moves: [] };
+
+    var moves = [];
+    if (diff > 0) {
+      var res = allocate(diff, todayISO());
+      if (res.leftover > 0.004) res.alloc.push({ billId: BUFFER_ID, amount: res.leftover });
+      logContributions(todayISO(), res.alloc, {
+        src: 'adjust', note: note || 'Balance corrected to match your bank'
+      });
+      res.alloc.forEach(function (a) {
+        var bb = a.billId === BUFFER_ID ? null : billById(a.billId);
+        moves.push({ name: bb ? bb.name : 'Extra buffer', amount: round2(a.amount) });
+      });
+    } else {
+      // Claw back, buffer first, then the bills with the most time left.
+      var left = round2(-diff);
+      var take = function (billId, name, available) {
+        if (left <= 0.004 || available <= 0.004) return;
+        var amt = round2(Math.min(available, left));
+        state.contributions.push({
+          id: uid(), billId: billId,
+          cycle: billId === BUFFER_ID ? 0 : (billById(billId) || {}).cycle || 0,
+          date: todayISO(), amount: -amt,
+          note: note || 'Balance corrected to match your bank',
+          src: 'adjust', ts: Date.now()
+        });
+        left = round2(left - amt);
+        moves.push({ name: name, amount: -amt });
+      };
+
+      take(BUFFER_ID, 'Extra buffer', bufferTotal());
+      // furthest due date first — diffDays(a, b) is b minus a, so this puts
+      // the latest date at the front
+      activeBills().slice().sort(function (a, b) {
+        return diffDays(a.dueDate || '9999-12-31', b.dueDate || '9999-12-31');
+      }).forEach(function (b) { take(b.id, b.name, savedFor(b)); });
+      rev++;
+    }
+    return { diff: diff, moves: moves, before: have, after: vaultTotal() };
+  }
+
   function removeContributions(ids) {
     state.contributions = state.contributions.filter(function (c) { return ids.indexOf(c.id) === -1; });
     rev++;
@@ -1602,14 +1661,20 @@
 
     saved: function () {
       var list = sortedStatuses();
+      var rows = list.filter(function (x) { return x.saved > 0.004; })
+        .map(function (x) { return [(x.bill.icon || '') + ' ' + x.bill.name, x.saved]; });
+      var buf = bufferTotal();
+      if (Math.abs(buf) > 0.004) rows.push(['💰 Extra buffer', buf]);
       return {
         title: 'What is this total?',
-        lead: 'Every dollar you have set aside so far, across all your bills. It should ' +
-          'match what is actually sitting in your bill money.',
-        rows: list.filter(function (x) { return x.saved > 0.004; })
-          .map(function (x) { return [(x.bill.icon || '') + ' ' + x.bill.name, x.saved]; }),
-        total: ['Set aside so far', round2(list.reduce(function (a, x) { return a + x.saved; }, 0))],
-        foot: ''
+        lead: 'The money you are holding for bills right now, spread across them. Money ' +
+          'that has gone out on a bill you marked paid is no longer counted — that is why ' +
+          'this drops each time you pay one.',
+        rows: rows,
+        total: ['Bill money you are holding', vaultTotal()],
+        foot: 'If that is not what is actually there, tap <strong>Set the real amount</strong> ' +
+          'below and put in the true figure. The app will square itself up rather than ' +
+          'carry on with a number you know is wrong.'
       };
     },
 
@@ -2269,7 +2334,7 @@
     }
 
     html += '<div class="card tight"><div class="stat-grid">' +
-      '<div class="stat"><div class="stat-val money">' + money0(totalSaved) + '</div>' +
+      '<div class="stat"><div class="stat-val money">' + money0(round2(totalSaved + buf)) + '</div>' +
       '<div class="stat-lbl">Set aside' + why('saved') + '</div></div>' +
       '<div class="stat"><div class="stat-val money">' + money0(Math.max(0, totalAmt - totalSaved)) + '</div>' +
       '<div class="stat-lbl">Still to find</div></div>' +
@@ -2293,6 +2358,10 @@
         '<div class="lr-sub">Banked beyond what your bills need</div></div>' +
         '<div class="lr-amt">' + money(buf) + '</div></div>';
     }
+    // The ledger drifts from the bank. Let the bank win.
+    html += '<div class="list-row" style="border-bottom:none"><div><div class="lr-sub">' +
+      'Spent some of it, or put more in? Tell the app what is really there.</div></div>' +
+      '<button class="btn sm ghost" data-act="set-balance">Set the real amount</button></div>';
     html += '</div>';
 
     list.forEach(function (s) { html += billCardHTML(s); });
@@ -3276,6 +3345,60 @@
   }
 
   /* ---- Money entry ------------------------------------------------------- */
+
+  /** "How much is actually in there?" — the app bends to the bank, not the other way. */
+  function balanceSheet() {
+    var have = vaultTotal();
+    var html = '<h2>What is really in your bill money?</h2>' +
+      '<div class="sheet-sub">Put in the amount you actually have set aside right now. ' +
+      'If you have dipped into it, or put in more than the app knows about, this is how ' +
+      'you tell it.</div>' +
+      '<div class="card tight"><div class="list-row" style="border-bottom:none">' +
+      '<div><div class="small">The app thinks you have</div>' +
+      '<div class="lr-sub">from everything you have logged</div></div>' +
+      '<div class="lr-amt">' + money(have) + '</div></div></div>' +
+      '<div class="field"><label>Actually in there</label>' +
+      '<input id="bal-amt" type="text" inputmode="decimal" value="' + have.toFixed(2) + '"></div>' +
+      '<div id="bal-preview" class="hint mb"></div>' +
+      '<button class="btn primary" id="bal-save" style="margin-bottom:8px">Use this amount</button>' +
+      '<button class="btn ghost" data-act="close-sheet">Cancel</button>';
+
+    openSheet(html, function (sheet) {
+      var input = $('#bal-amt', sheet);
+      var out = $('#bal-preview', sheet);
+
+      function preview() {
+        var v = parseFloat(input.value);
+        if (isNaN(v)) { out.textContent = ''; return; }
+        var diff = round2(v - have);
+        if (Math.abs(diff) <= 0.004) { out.innerHTML = 'That matches what the app has. Nothing changes.'; return; }
+        if (diff > 0) {
+          out.innerHTML = '<strong>' + money(diff) + ' more</strong> than the app has. It goes ' +
+            'onto your bills, nearest due date first, so your daily amount drops.';
+        } else {
+          out.innerHTML = '<strong>' + money(-diff) + ' less</strong> than the app has. It comes ' +
+            'back off the bills with the most time left, so the ones due soonest keep their ' +
+            'money — your daily amount goes up to make it back.';
+        }
+      }
+      input.addEventListener('input', preview);
+      preview();
+
+      $('#bal-save', sheet).addEventListener('click', function () {
+        var v = round2(parseFloat(input.value));
+        if (isNaN(v) || v < 0) return toast('⚠️ Enter the amount you have');
+        var before = JSON.parse(JSON.stringify(state.contributions));
+        var res = reconcileTo(v);
+        save(); closeSheet(); render();
+        if (!res.diff) return toast('✔️ Already matches — nothing changed');
+        lastUndo = { fn: function () { state.contributions = before; rev++; save(); render(); } };
+        toast((res.diff > 0 ? '➕ ' : '➖ ') + money(Math.abs(res.diff)) +
+          (res.diff > 0 ? ' added' : ' taken off') + '<br><strong>Bill money is now ' +
+          money(res.after) + '</strong>', 'Undo');
+      });
+      setTimeout(function () { input.focus(); input.select(); }, 220);
+    });
+  }
 
   function amountSheet(o) {
     // o: {title, sub, value, billId, date, allowComplete}
@@ -4364,6 +4487,15 @@
         '</div>';
     }
 
+    html += '<div class="card tight"><div class="card-title">When the app is wrong</div>' +
+      '<p class="small">Money gets spent, a day goes unlogged, a transfer lands late. When ' +
+      'what the app thinks you have set aside is not what is really there, tap ' +
+      '<strong>Set the real amount</strong> on the Bills tab and put in the true figure.</p>' +
+      '<p class="small dim mt">Put in more and it goes onto your bills nearest due date first, ' +
+      'so the daily amount drops. Put in less and it comes off the bills with the most time ' +
+      'left — the ones due soonest keep their money, and the daily amount climbs to make it ' +
+      'back. Either way it can be undone.</p></div>';
+
     html += '<div class="card tight"><div class="card-title">When a bill is paid</div>' +
       '<p class="small">Tap <strong>✓ Mark paid</strong> under the bill on the Bills tab. ' +
       'The money you had put by for it comes out of your bill money, and the app tells you ' +
@@ -4514,6 +4646,8 @@
         break;
 
       case 'explain': explainSheet(t.dataset.key); break;
+
+      case 'set-balance': closeSheet(); balanceSheet(); break;
 
       case 'go-business': view = 'business'; render(); window.scrollTo({ top: 0 }); break;
 
