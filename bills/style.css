@@ -541,6 +541,19 @@ main { padding: 16px 16px 0; }
 .banner.good { background: rgba(34,197,94,0.1);  border-color: rgba(34,197,94,0.32); }
 /* A card whose number is good news. */
 .card.good-card { border-color: rgba(34,197,94,0.35); }
+
+/* A bill, with its own "done" action under it. */
+.bill-wrap { margin-bottom: 12px; }
+.bill-wrap .bill { margin-bottom: 0; }
+.bill-foot {
+  display: flex; gap: 8px; padding: 9px 12px 0;
+  border-top: 1px solid var(--line-soft); margin-top: -1px;
+}
+.bill-foot .btn { flex: 1; }
+.bill-foot.done {
+  justify-content: center; color: var(--green);
+  font-size: 0.8rem; font-weight: 700; padding-bottom: 9px;
+}
 .card.good-card #free-clear { color: var(--green); }
 .banner .b-x { margin-left: auto; background: none; border: none; color: var(--text-dim); font-size: 1rem; padding: 0 2px; flex: none; }
 .banner strong { display: block; margin-bottom: 2px; }

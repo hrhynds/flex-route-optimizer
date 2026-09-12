@@ -22,7 +22,7 @@
 
   var STORE_KEY = 'billcushion.v1';
   var BACKUP_KEY = 'billcushion.lastgood';   // the state as of the last clean open
-  var APP_VERSION = '2026.09.10';            // bump when shipping; shown under More
+  var APP_VERSION = '2026.09.12';            // bump when shipping; shown under More
   var MS_DAY = 86400000;
   var DOW_LONG = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
   var DOW_MID = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
@@ -1315,7 +1315,10 @@
       }
     }
     save(); render();
-    toast('🎉 ' + b.name + ' paid' + (surplus > 0.004 ? ' · ' + money(surplus) + ' rolled forward' : ''));
+    toast('🎉 ' + b.name + ' paid · ' + money(round2(Math.min(saved, b.amount))) +
+      ' out of your bill money' +
+      (surplus > 0.004 ? ' · ' + money(surplus) + ' carried over' : '') +
+      (next ? ' · next one ' + fmtDate(next) : ' · archived'));
   }
 
   function advanceDue(b) {
@@ -2177,9 +2180,16 @@
     host.innerHTML = html;
   }
 
+  /** Was this bill settled today? Its card should say so, not look unfunded. */
+  function paidToday(b) {
+    var t = todayISO();
+    return (b.paidHistory || []).some(function (h) { return h.paidOn === t; });
+  }
+
   function billCardHTML(s) {
     var b = s.bill;
-    var h = '<button class="bill s-' + s.key + '" data-act="open-bill" data-id="' + b.id + '">';
+    var h = '<div class="bill-wrap">' +
+      '<button class="bill s-' + s.key + '" data-act="open-bill" data-id="' + b.id + '">';
     h += '<div class="bill-top">' +
       '<div class="bill-name">' + esc(b.icon || '🧾') + ' ' + esc(b.name) + '</div>' +
       '<div class="bill-amt">' + money(s.saved) + ' <small>/ ' + money(b.amount) + '</small></div>' +
@@ -2210,6 +2220,19 @@
         : '') +
       (s.key === 'behind' ? '<span>· <strong>' + money(s.shortfall) + ' behind pace</strong></span>' : '') +
       '</div></button>';
+
+    // Marking a bill done is the thing you come here to do on the day it is
+    // due, so it should not be three taps down inside a sheet.
+    if (paidToday(b)) {
+      h += '<div class="bill-foot done"><span>✓ Paid today · next one ' +
+        fmtDate(b.dueDate) + '</span></div>';
+    } else {
+      h += '<div class="bill-foot">' +
+        '<button class="btn sm" data-act="mark-paid" data-id="' + b.id + '">✓ Mark paid</button>' +
+        '<button class="btn sm ghost" data-act="add-money" data-id="' + b.id + '">＋ Add money</button>' +
+        '</div>';
+    }
+    h += '</div>';
     return h;
   }
 
@@ -2994,13 +3017,14 @@
       }
     }
 
-    html += '<div class="btn-row mt" style="margin-bottom:8px">' +
-      '<button class="btn primary" data-act="add-money" data-id="' + b.id + '">＋ Add money</button>' +
-      '<button class="btn" data-act="mark-paid" data-id="' + b.id + '">Mark paid</button></div>' +
+    html += '<button class="btn primary mt" data-act="mark-paid" data-id="' + b.id + '" ' +
+      'style="margin-bottom:8px">✓ Mark this bill paid</button>' +
+      '<div class="btn-row" style="margin-bottom:8px">' +
+      '<button class="btn" data-act="add-money" data-id="' + b.id + '">＋ Add money</button>' +
+      '<button class="btn ghost" data-act="close-sheet">Close</button></div>' +
       '<div class="btn-row" style="margin-bottom:8px">' +
       '<button class="btn ghost" data-act="edit-bill" data-id="' + b.id + '">Name &amp; repeat</button>' +
-      '<button class="btn danger" data-act="delete-bill" data-id="' + b.id + '">Delete</button></div>' +
-      '<button class="btn ghost" data-act="close-sheet" style="margin-bottom:8px">Close</button>';
+      '<button class="btn danger" data-act="delete-bill" data-id="' + b.id + '">Delete</button></div>';
 
     if (hist.length) {
       html += '<div class="sep"></div><div class="card-title">This cycle\'s deposits</div>';
@@ -4187,6 +4211,14 @@
         '</div>';
     }
 
+    html += '<div class="card tight"><div class="card-title">When a bill is paid</div>' +
+      '<p class="small">Tap <strong>✓ Mark paid</strong> under the bill on the Bills tab. ' +
+      'The money you had put by for it comes out of your bill money, and the app tells you ' +
+      'the balance before and after.</p>' +
+      '<p class="small dim mt">A bill that repeats then starts saving for the next one straight ' +
+      'away, so what is still to find goes back up — that is next month\'s, not a mistake. ' +
+      'The confirm says by how much before you tap. A one-off is filed away and stops asking.</p></div>';
+
     html += '<div class="card tight"><div class="card-title">Free and clear</div>' +
       '<p class="small">The last card on the day is money <strong>no bill has a claim on</strong>. ' +
       'It takes everything the work has made you, subtracts what has gone to bills and what ' +
@@ -4255,22 +4287,35 @@
       case 'edit-bill': if (b) billSheet(b); break;
       case 'delete-bill': if (b) { closeSheet(); deleteBill(b); } break;
 
-      case 'mark-paid':
+      case 'mark-paid': {
         if (!b) break;
         var st = statusOf(b);
         closeSheet();
+        // Say exactly what moves. Paying a recurring bill both empties its
+        // share of the pot and arms the next one, and being surprised by the
+        // second half is how "I paid it and now I owe more" happens.
+        var potNow = vaultTotal();
+        var spend = round2(Math.min(st.saved, b.amount));
+        var over = round2(Math.max(0, st.saved - b.amount));
+        var again = b.recurrence === 'once' ? null : advanceDue(b);
+        var lines = ['<strong>' + money(spend) + '</strong> comes out of your bill money' +
+          (st.remaining > 0.004
+            ? ', and the last ' + money(st.remaining) + ' you pay from your own pocket.'
+            : '.')];
+        lines.push('Bill money goes from ' + money(potNow) + ' to ' +
+          money(round2(potNow - spend)) + '.');
+        lines.push(again
+          ? 'The next ' + esc(b.name) + ' is due ' + fmtDate(again) + ', so it starts saving ' +
+            'from today' + (over > 0.004 ? ' with ' + money(over) + ' carried over' : '') +
+            ' — expect "still to find" to go up by about ' + money(round2(b.amount - over)) + '.'
+          : 'This one does not repeat, so it moves into your history and stops asking.');
         confirmSheet({
           title: 'Mark ' + esc(b.name) + ' as paid?',
-          body: st.remaining > 0.004
-            ? 'You\'ve banked <strong>' + money(st.saved) + '</strong> of ' + money(b.amount) +
-              ' — you\'re ' + money(st.remaining) + ' short. Marking it paid starts the next cycle from zero.'
-            : 'You\'ve banked <strong>' + money(st.saved) + '</strong>. That money gets used, and ' +
-              (b.recurrence === 'once' ? 'the bill is archived.' :
-               'the next one (' + fmtDate(advanceDue(b)) + ') starts fresh' +
-               (st.saved > b.amount ? ' with ' + money(st.saved - b.amount) + ' rolled over.' : '.')),
+          body: lines.join('<br><br>'),
           actions: [{ label: 'Yes, it\'s paid', cls: 'primary', fn: function () { markPaid(b); } }]
         });
         break;
+      }
 
       case 'add-money':
         if (!b) break;
