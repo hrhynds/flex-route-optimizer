@@ -177,6 +177,13 @@ The next Rent is due Oct 1, so it starts saving from today
  — expect "still to find" to go up by about $300.00.
 ```
 
+Then it answers the question you were about to ask anyway — **what is left for the rest
+of the month**. The confirm projects it for after the payment (worked out by applying the
+payment to a copy of your data and reading the result, so "after this" is never a figure
+measured before the change), and the message afterwards repeats the same number. The
+Bills tab carries it permanently under its totals as **Rest of \<month\>**, with a tap-to-see
+list of the bills still to land and what each still needs.
+
 That last line matters: a repeating bill re-arms the moment you pay it, so the balance
 still to find goes *up*. It is next month's, not a mistake, and the app says so rather
 than letting you discover it. Paying while short says where the rest comes from; saving

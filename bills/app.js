@@ -22,7 +22,7 @@
 
   var STORE_KEY = 'billcushion.v1';
   var BACKUP_KEY = 'billcushion.lastgood';   // the state as of the last clean open
-  var APP_VERSION = '2026.09.12';            // bump when shipping; shown under More
+  var APP_VERSION = '2026.09.12b';            // bump when shipping; shown under More
   var MS_DAY = 86400000;
   var DOW_LONG = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
   var DOW_MID = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
@@ -1115,6 +1115,53 @@
   }
 
   /**
+   * What the rest of this month still asks for.
+   *
+   * Two honest answers, because they are different questions. `stillToSetAside`
+   * is what the plan asks for across the days left in the month — the number to
+   * act on. `billsLeft` is the bills actually landing before the month is out
+   * and what each still needs, which is what "the rest of the month" means when
+   * you have just paid one off.
+   */
+  function restOfMonth(fromISO_) {
+    var from = fromISO_ || todayISO();
+    var m = monthWindow(from);
+    var end = m.end;
+
+    // the plan, for the days that are left
+    var sim = simulate(from, diffDays(from, end) >= 0 ? end : from);
+    var stillToSetAside = 0, daysLeft = 0;
+    var iso = from;
+    for (var i = 0; i <= clamp(diffDays(from, end), 0, 40); i++) {
+      var cell = sim[iso];
+      if (cell) {
+        stillToSetAside += cell.remainingTotal;
+        if (cell.funding) daysLeft++;
+      }
+      iso = addDays(iso, 1);
+    }
+
+    // the bills themselves, and what each of them still wants
+    var billsLeft = [];
+    activeBills().forEach(function (b) {
+      if (!b.dueDate) return;
+      if (diffDays(from, b.dueDate) < 0 || diffDays(b.dueDate, end) < 0) return;
+      var left = round2(Math.max(0, b.amount - savedFor(b)));
+      billsLeft.push({ bill: b, date: b.dueDate, amount: b.amount, remaining: left });
+    });
+    billsLeft.sort(function (a, z) { return diffDays(z.date, a.date); });
+
+    return {
+      month: m, end: end,
+      billsLeft: billsLeft,
+      billsLeftTotal: round2(billsLeft.reduce(function (a, x) { return a + x.remaining; }, 0)),
+      stillToSetAside: round2(stillToSetAside),
+      daysLeft: daysLeft,
+      perDay: daysLeft > 0 ? round2(stillToSetAside / daysLeft) : round2(stillToSetAside)
+    };
+  }
+
+  /**
    * Money with no bill attached to it.
    *
    * Of everything the work has made you, some has gone to bills and some of
@@ -1290,7 +1337,8 @@
     });
   }
 
-  function markPaid(b) {
+  /** Settle a bill in state. No saving, no redraw — see markPaid. */
+  function applyPaid(b) {
     var saved = savedFor(b);
     var surplus = round2(saved - b.amount);
     var next = advanceDue(b);
@@ -1314,11 +1362,44 @@
         });
       }
     }
+    rev++;
+    return { saved: saved, surplus: surplus, next: next };
+  }
+
+  /**
+   * Where the month lands if this bill is paid — worked out by actually doing
+   * it on a copy and putting the copy back. Saying "after this" about a figure
+   * measured before the change is how a confirm screen starts lying.
+   */
+  function previewAfterPaid(b) {
+    var snapshot = JSON.parse(JSON.stringify(state));
+    var out;
+    try {
+      applyPaid(billById(b.id) || b);
+      out = restOfMonth();
+    } finally {
+      state = snapshot;
+      rev++;                 // the contribution index is keyed on it
+    }
+    return out;
+  }
+
+  function markPaid(bill) {
+    // Re-resolve from current state: previewing what a payment would do swaps
+    // state for a restored copy, which leaves any held reference orphaned.
+    var b = billById(bill.id) || bill;
+    var res = applyPaid(b);
+    var saved = res.saved;
     save(); render();
+    // The question right after paying a bill is always the same one: what is
+    // left to find before this month is out. Answer it without being asked.
+    var rest = restOfMonth();
     toast('🎉 ' + b.name + ' paid · ' + money(round2(Math.min(saved, b.amount))) +
-      ' out of your bill money' +
-      (surplus > 0.004 ? ' · ' + money(surplus) + ' carried over' : '') +
-      (next ? ' · next one ' + fmtDate(next) : ' · archived'));
+      ' out of your bill money<br><strong>' +
+      (rest.stillToSetAside > 0.004
+        ? money(rest.stillToSetAside) + ' still to set aside before ' +
+          MON_LONG[fromISO(rest.end).getMonth()] + ' is out'
+        : 'Nothing more to set aside this month') + '</strong>');
   }
 
   function advanceDue(b) {
@@ -1546,6 +1627,27 @@
         foot: 'This says what is left once every bill is paid for — it is not a bank ' +
           'balance, so it does not know what you have already spent. Counted from ' +
           fmtDate(f.from) + ', when you started.'
+      };
+    },
+
+    restmonth: function () {
+      var r = restOfMonth();
+      return {
+        title: 'What is left for the rest of ' + MON_LONG[fromISO(r.end).getMonth()] + '?',
+        lead: r.billsLeft.length
+          ? 'The bills still landing before the month is out, and what each of them ' +
+            'still needs after what you have already put by.'
+          : 'No more bills land this month. What is shown is what the plan asks for the ' +
+            'days that are left, building toward bills further out.',
+        rows: r.billsLeft.map(function (x) {
+          return [(x.bill.icon || '🧾') + ' ' + x.bill.name + ' — due ' + fmtDate(x.date) +
+            (x.remaining <= 0.004 ? ' (covered)' : ''), x.remaining];
+        }),
+        total: ['Still to find on those bills', r.billsLeftTotal],
+        foot: 'The figure on the card is <strong>' + money(r.stillToSetAside) + '</strong> — ' +
+          'what the plan asks for across the ' + plural(r.daysLeft, unitWord()) + ' left in the ' +
+          'month, which is about ' + money(r.perDay) + ' a ' + unitWord() + '. It differs from ' +
+          'the total above because bills due next month are already being saved for too.'
       };
     },
 
@@ -2143,8 +2245,16 @@
       '<div class="stat"><div class="stat-val money">' + money0(perDayAll) + '</div>' +
       '<div class="stat-lbl">Each ' + unitWord() + why('perday') + '</div></div>' +
       '</div>';
+    var rest = restOfMonth();
+    html += '<div class="list-row" style="margin-top:6px"><div><div>Rest of ' +
+      MON_LONG[fromISO(rest.end).getMonth()] + why('restmonth') + '</div>' +
+      '<div class="lr-sub">' + (rest.billsLeft.length
+        ? plural(rest.billsLeft.length, 'bill') + ' still to land · ' +
+          plural(rest.daysLeft, unitWord()) + ' left'
+        : 'no more bills land this month') + '</div></div>' +
+      '<div class="lr-amt">' + money(rest.stillToSetAside) + '</div></div>';
     if (buf > 0.004) {
-      html += '<div class="list-row" style="margin-top:6px"><div><div>💰 Extra buffer</div>' +
+      html += '<div class="list-row"><div><div>💰 Extra buffer</div>' +
         '<div class="lr-sub">Banked beyond what your bills need</div></div>' +
         '<div class="lr-amt">' + money(buf) + '</div></div>';
     }
@@ -4217,7 +4327,11 @@
       'the balance before and after.</p>' +
       '<p class="small dim mt">A bill that repeats then starts saving for the next one straight ' +
       'away, so what is still to find goes back up — that is next month\'s, not a mistake. ' +
-      'The confirm says by how much before you tap. A one-off is filed away and stops asking.</p></div>';
+      'The confirm says by how much before you tap. A one-off is filed away and stops asking.</p>' +
+      '<p class="small mt">Both the confirm and the message afterwards tell you ' +
+      '<strong>what is left to set aside before the month is out</strong>, so you never have to ' +
+      'go looking. The Bills tab carries the same figure under its totals, as ' +
+      '<strong>Rest of ' + MON_LONG[fromISO(todayISO()).getMonth()] + '</strong>.</p></div>';
 
     html += '<div class="card tight"><div class="card-title">Free and clear</div>' +
       '<p class="small">The last card on the day is money <strong>no bill has a claim on</strong>. ' +
@@ -4309,6 +4423,12 @@
             'from today' + (over > 0.004 ? ' with ' + money(over) + ' carried over' : '') +
             ' — expect "still to find" to go up by about ' + money(round2(b.amount - over)) + '.'
           : 'This one does not repeat, so it moves into your history and stops asking.');
+        var restNext = previewAfterPaid(b);
+        lines.push('After this, <strong>' + money(restNext.stillToSetAside) + '</strong> is left ' +
+          'to set aside before ' + MON_LONG[fromISO(restNext.end).getMonth()] + ' is out' +
+          (restNext.billsLeft.length
+            ? ', across ' + plural(restNext.billsLeft.length, 'bill') + ' still to land this month.'
+            : ' — no more bills land this month.'));
         confirmSheet({
           title: 'Mark ' + esc(b.name) + ' as paid?',
           body: lines.join('<br><br>'),
