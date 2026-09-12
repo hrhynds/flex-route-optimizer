@@ -164,6 +164,26 @@ It sits above *still to set aside* and *already set aside*, which answer a diffe
 question: those cover the days shown on that calendar, and a bill's funding window can
 run past the end of a month.
 
+### Marking a bill paid
+
+Every bill on the Bills tab carries **✓ Mark paid** and **＋ Add money** under it — the
+thing you come here to do on the day a bill lands should not be three taps down inside a
+sheet. The confirm spells out what moves before you commit:
+
+```
+$300.00 comes out of your bill money.
+Bill money goes from $340.00 to $40.00.
+The next Rent is due Oct 1, so it starts saving from today
+ — expect "still to find" to go up by about $300.00.
+```
+
+That last line matters: a repeating bill re-arms the moment you pay it, so the balance
+still to find goes *up*. It is next month's, not a mistake, and the app says so rather
+than letting you discover it. Paying while short says where the rest comes from; saving
+past the amount carries the extra into the next cycle; a one-off is filed away and stops
+asking. Afterwards the card reads **✓ Paid today · next one Oct 1** instead of looking
+untouched.
+
 ### Free and clear
 
 The day ends with the figure that answers "how much of this is actually mine?" — money
