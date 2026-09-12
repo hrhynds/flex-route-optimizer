@@ -156,8 +156,8 @@ the cushion is *how early to be ready*, and money set aside is money set aside.
   put it right: add a job or a cost, switch the whole day's partner share, correct a
   set-aside amount rather than deleting it, add more, or reopen it.
 
-The month summary leads with **Bills due in <month>** — every bill landing in the month
-you're looking at, whatever rhythm it keeps, added up. A weekly bill counts each time it
+The month summary leads with **Left to pay in <month>** — every bill landing in the month
+you're looking at, whatever rhythm it keeps, minus the ones already marked paid. A weekly bill counts each time it
 lands, a monthly one follows its anchor day into months its current cycle hasn't reached
 yet, and cycles already paid come from the record. Tap the **?** for the itemised list.
 It sits above *still to set aside* and *already set aside*, which answer a different
@@ -177,8 +177,11 @@ The next Rent is due Oct 1, so it starts saving from today
  — expect "still to find" to go up by about $300.00.
 ```
 
-Then it answers the question you were about to ask anyway — **what is left for the rest
-of the month**. The confirm projects it for after the payment (worked out by applying the
+Then it answers the question you were about to ask anyway — **what is left to pay this
+month**. A bill you have marked paid drops out of that figure, which is the whole point
+of marking it: the same number appears on the Plan tab under the calendar and on the
+Bills tab under the totals, both headed **Left to pay in \<month\>**, and both fall by
+exactly the bill you just settled. The confirm projects it for after the payment (worked out by applying the
 payment to a copy of your data and reading the result, so "after this" is never a figure
 measured before the change), and the message afterwards repeats the same number. The
 Bills tab carries it permanently under its totals as **Rest of \<month\>**, with a tap-to-see
