@@ -164,6 +164,20 @@ It sits above *still to set aside* and *already set aside*, which answer a diffe
 question: those cover the days shown on that calendar, and a bill's funding window can
 run past the end of a month.
 
+### When the ledger and the bank disagree
+
+Money gets spent, a day goes unlogged, a transfer lands late. **Set the real amount** on
+the Bills tab takes the true figure and squares the app up to it rather than carrying on
+with a number you know is wrong.
+
+More than the app has goes onto the bills nearest due first, so the daily amount drops.
+Less comes back off the bills with the *most* time left — the ones due soonest keep their
+funding, and the daily figure climbs to make it back. The sheet says which way it will go
+before you commit, and the change can be undone.
+
+The pot itself is what you are holding right now: money spent on a bill you marked paid
+stops counting, which is why it falls each time you pay one.
+
 ### Marking a bill paid
 
 Every bill on the Bills tab carries **✓ Mark paid** and **＋ Add money** under it — the
