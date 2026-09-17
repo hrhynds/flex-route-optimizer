@@ -156,13 +156,45 @@ the cushion is *how early to be ready*, and money set aside is money set aside.
   put it right: add a job or a cost, switch the whole day's partner share, correct a
   set-aside amount rather than deleting it, add more, or reopen it.
 
-The month summary leads with **Left to pay in <month>** — every bill landing in the month
-you're looking at, whatever rhythm it keeps, minus the ones already marked paid. A weekly bill counts each time it
+The month summary is three lines that follow on from each other, so the month reads as one
+sum rather than three competing ones:
+
+```
+Left to pay in September                                   $650.00
+  $600.00 of that is already set aside, so $50.00 is still to find
+In your bill money now                                     $720.00
+```
+
+**Left to pay in \<month\>** is every bill landing in the month you're looking at, whatever
+rhythm it keeps, minus the ones already marked paid. A weekly bill counts each time it
 lands, a monthly one follows its anchor day into months its current cycle hasn't reached
 yet, and cycles already paid come from the record. Tap the **?** for the itemised list.
-It sits above *still to set aside* and *already set aside*, which answer a different
-question: those cover the days shown on that calendar, and a bill's funding window can
-run past the end of a month.
+The line beneath splits that figure in two — what you are already holding for those bills,
+and what is still to find — and the two always add back to it.
+
+**In your bill money now** is the whole pot, this month's bills and later ones together. It
+is deliberately the same number as the one at the top of the Bills tab: the same words have
+to mean the same figure on every tab, or the app is lying somewhere.
+
+Its sub-line carries one more figure — *the days left in \<month\> ask for $X more* — and that
+is a third thing again: what the daily amounts on the calendar above add up to over the days
+you have left, which runs higher than this month's bills need because those days are already
+building toward next month's. It is read straight off the same cells the calendar draws, so
+the row and the calendar can't disagree, and its **?** spells out which figure is which.
+
+Earlier versions put *already set aside this month* here as a running total of everything
+paid in during the month. That broke the moment you marked a bill paid: the money left the
+pot but not the total, so the Bills tab said $220 and the Plan tab said $720, both calling
+it "set aside". The chain above can't drift that way — every line is derived from the same
+bills and the same pot, at the moment you look at it.
+
+A bill whose due date has gone by without being marked paid still counts as this month's.
+The window runs from the first of the month, not from today, because an overdue bill is
+very much still something you have to pay.
+
+The **Still to find** stat above the calendar is a different figure on purpose: it counts
+every bill you track, in any month, which is why it's larger. Tap its **?** and it lists
+each bill with what it still needs — and explains why paying a bill makes it go *up*.
 
 ### When the ledger and the bank disagree
 
@@ -197,9 +229,9 @@ of marking it: the same number appears on the Plan tab under the calendar and on
 Bills tab under the totals, both headed **Left to pay in \<month\>**, and both fall by
 exactly the bill you just settled. The confirm projects it for after the payment (worked out by applying the
 payment to a copy of your data and reading the result, so "after this" is never a figure
-measured before the change), and the message afterwards repeats the same number. The
-Bills tab carries it permanently under its totals as **Rest of \<month\>**, with a tap-to-see
-list of the bills still to land and what each still needs.
+measured before the change), and the message afterwards repeats the same number. The Bills
+tab carries it permanently under its totals, with a tap-to-see list of the bills still to
+land, what each still needs, and how much of the month is already covered.
 
 That last line matters: a repeating bill re-arms the moment you pay it, so the balance
 still to find goes *up*. It is next month's, not a mistake, and the app says so rather

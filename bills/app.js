@@ -22,7 +22,7 @@
 
   var STORE_KEY = 'billcushion.v1';
   var BACKUP_KEY = 'billcushion.lastgood';   // the state as of the last clean open
-  var APP_VERSION = '2026.09.12d';            // bump when shipping; shown under More
+  var APP_VERSION = '2026.09.17a';            // bump when shipping; shown under More
   var MS_DAY = 86400000;
   var DOW_LONG = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
   var DOW_MID = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
@@ -1118,6 +1118,36 @@
   }
 
   /**
+   * What the daily plan adds up to over the days still ahead in the month the
+   * Plan tab is showing. Deliberately not the same thing as what this month's
+   * bills still need: the days left are already putting money toward bills
+   * that land later, so this runs higher. The ? on that row says so out loud.
+   *
+   * The calendar used to total this up as it drew the cells, which meant the
+   * row and its explanation counted the same thing twice, in two places.
+   */
+  function planAskLeft(cm) {
+    var t = todayISO();
+    var c = cm || calMonth || { y: fromISO(t).getFullYear(), m: fromISO(t).getMonth() };
+    var days = new Date(c.y, c.m + 1, 0).getDate();
+    var lastISO = toISO(new Date(c.y, c.m, days));
+    if (diffDays(t, lastISO) < 0) return 0;          // the month has already gone
+    // For the month you are actually in, this is the same question restOfMonth
+    // already answers — so ask it, rather than keeping a second sum that can
+    // drift away from the first.
+    if (c.y === fromISO(t).getFullYear() && c.m === fromISO(t).getMonth()) {
+      return round2(restOfMonth().stillToSetAside);
+    }
+    var sim = simulate(t, lastISO);
+    var total = 0, iso = toISO(new Date(c.y, c.m, 1));
+    for (var d = 1; d <= days; d++) {
+      if (!isPast(iso) && sim[iso]) total += sim[iso].remainingTotal;
+      iso = addDays(iso, 1);
+    }
+    return round2(total);
+  }
+
+  /**
    * What the rest of this month still asks for.
    *
    * Two honest answers, because they are different questions. `stillToSetAside`
@@ -1148,7 +1178,9 @@
     var billsLeft = [];
     activeBills().forEach(function (b) {
       if (!b.dueDate) return;
-      if (diffDays(from, b.dueDate) < 0 || diffDays(b.dueDate, end) < 0) return;
+      // Anywhere in the month, not just from today: a bill whose date has gone
+      // by without being marked paid is still one you have to pay this month.
+      if (diffDays(m.start, b.dueDate) < 0 || diffDays(b.dueDate, end) < 0) return;
       var left = round2(Math.max(0, b.amount - savedFor(b)));
       billsLeft.push({ bill: b, date: b.dueDate, amount: b.amount, remaining: left });
     });
@@ -1734,6 +1766,55 @@
           (r.paidThisMonth > 0.004
             ? plural(r.paidCount, 'bill') + ' worth ' + money(r.paidThisMonth) +
               ' went out earlier this month and is not counted here.'
+            : '')
+      };
+    },
+
+    tofind: function () {
+      var list = sortedStatuses().filter(function (x) { return x.remaining > 0.004; });
+      var rm = restOfMonth();
+      return {
+        title: 'What does "still to find" cover?',
+        lead: 'Every bill you track, whatever month it lands in — what each one needs ' +
+          'that you have not put by yet.',
+        rows: list.map(function (x) {
+          return [(x.bill.icon || '🧾') + ' ' + x.bill.name + ' — due ' + fmtDate(x.bill.dueDate),
+                  x.remaining];
+        }),
+        total: ['Still to find, all bills', round2(list.reduce(function (a, x) { return a + x.remaining; }, 0))],
+        foot: 'This is why it goes <em>up</em> when you pay a bill: the one you just settled ' +
+          'starts saving for its next round, and that round is now owed. ' +
+          (rm.leftToFind > 0.004
+            ? 'Only <strong>' + money(rm.leftToFind) + '</strong> of it belongs to bills ' +
+              'landing this month.'
+            : 'None of it belongs to bills landing this month — it is all for later ones.')
+      };
+    },
+
+    monthmoney: function () {
+      var rm = restOfMonth();
+      var ask = planAskLeft();
+      var rows = sortedStatuses().filter(function (x) { return x.saved > 0.004; })
+        .map(function (x) { return [(x.bill.icon || '🧾') + ' ' + x.bill.name, x.saved]; });
+      var buf = bufferTotal();
+      if (Math.abs(buf) > 0.004) rows.push(['💰 Extra buffer', buf]);
+      return {
+        title: 'What is in your bill money?',
+        lead: 'The money you are holding for bills right now — the same figure as on the ' +
+          'Bills tab. Money that has gone out on a bill you marked paid is no longer in here, ' +
+          'which is why it drops each time you pay one.',
+        rows: rows,
+        total: ['In your bill money now', vaultTotal()],
+        foot: (rm.paidThisMonth > 0.004
+          ? money(rm.paidThisMonth) + ' went out on bills earlier this month, so it is not ' +
+            'counted here. '
+          : '') +
+          'It covers every bill you track, including ones due next month, so it is bigger ' +
+          'than what this month alone still needs.' +
+          (ask > 0.004
+            ? ' The second figure on that row, <strong>' + money(ask) + '</strong>, ' +
+              'is something else again: it is what the daily amounts add up to over the days ' +
+              'you have left this month. Some of that is a head start on next month.'
             : '')
       };
     },
@@ -2337,7 +2418,7 @@
       '<div class="stat"><div class="stat-val money">' + money0(round2(totalSaved + buf)) + '</div>' +
       '<div class="stat-lbl">Set aside' + why('saved') + '</div></div>' +
       '<div class="stat"><div class="stat-val money">' + money0(Math.max(0, totalAmt - totalSaved)) + '</div>' +
-      '<div class="stat-lbl">Still to find</div></div>' +
+      '<div class="stat-lbl">Still to find' + why('tofind') + '</div></div>' +
       '<div class="stat"><div class="stat-val money">' + money0(perDayAll) + '</div>' +
       '<div class="stat-lbl">Each ' + unitWord() + why('perday') + '</div></div>' +
       '</div>';
@@ -2717,7 +2798,6 @@
 
     for (var blank = 0; blank < first.getDay(); blank++) html += '<div class="cal-cell blank"></div>';
 
-    var monthRequired = 0, monthActual = 0;
     for (var d = 1; d <= lastDay; d++) {
       var iso = toISO(new Date(calMonth.y, calMonth.m, d));
       var funding = isFundingDay(iso);
@@ -2732,7 +2812,6 @@
 
       if (past) {
         amt = dayActual(iso);
-        monthActual += amt;
         // Judge a past day by the money that actually went across, not by
         // whether a button was ever tapped. Setting money aside and never
         // pressing "complete day" is not a missed day.
@@ -2750,9 +2829,6 @@
         cls += ' past';
       } else {
         amt = cell ? cell.remainingTotal : 0;
-        monthRequired += amt;
-        // money banked today counts whether or not the day was marked complete
-        monthActual += dayActual(iso);
         if (rec && rec.completed) { cls += ' done'; mark = '✓'; }
       }
 
@@ -2786,9 +2862,32 @@
             ? ' · ' + money(duePaid) + ' of ' + money(dueTotal) + ' already paid'
             : ' · ' + money(dueTotal) + ' for the month')
         : 'nothing falls due this month') + '</div></div>' +
-      '<div class="lr-amt">' + money(dueLeft) + '</div></div>' +
-      '<div class="list-row"><div>Still to set aside this month</div><div class="lr-amt">' + money(monthRequired) + '</div></div>' +
-      '<div class="list-row"><div>Already set aside this month</div><div class="lr-amt">' + money(monthActual) + '</div></div>' +
+      '<div class="lr-amt">' + money(dueLeft) + '</div></div>';
+
+    // Two rows that follow on from each other, instead of three that argue.
+    // "Already set aside this month" used to sit here as a running total of
+    // everything ever put in during the month — so paying a bill emptied the
+    // pot without moving it, and the same words meant two different numbers
+    // on two different tabs.
+    var thisMonth = calMonth.y === fromISO(t).getFullYear() && calMonth.m === fromISO(t).getMonth();
+    if (thisMonth && dueLeft > 0.004) {
+      var rm = restOfMonth();
+      var readyFor = round2(rm.leftToPay - rm.leftToFind);
+      html += '<div class="list-row"><div class="lr-sub" style="padding-left:2px">' +
+        (readyFor > 0.004
+          ? money(readyFor) + ' of that is already set aside, so <strong>' +
+            money(rm.leftToFind) + '</strong> is still to find'
+          : 'none of it is set aside yet') + '</div></div>';
+    }
+
+    var planAsk = planAskLeft();
+    html += '<div class="list-row"><div>In your bill money now' + why('monthmoney') +
+      '<div class="lr-sub">across every bill, this month\'s and later' +
+      (planAsk > 0.004
+        ? ' · the days left in ' + MON_LONG[calMonth.m] + ' ask for ' +
+          money(planAsk) + ' more'
+        : '') + '</div></div>' +
+      '<div class="lr-amt">' + money(vaultTotal()) + '</div></div>' +
       '</div>';
 
     // upcoming bills timeline
@@ -4508,6 +4607,20 @@
       'straight out of it. The same figure sits on the Bills tab under the totals and on the ' +
       'Plan tab under the calendar, as <strong>Left to pay in ' +
       MON_LONG[fromISO(todayISO()).getMonth()] + '</strong>.</p></div>';
+
+    html += '<div class="card tight"><div class="card-title">Reading the month</div>' +
+      '<p class="small">Under the calendar on the Plan tab, three lines follow on from each ' +
+      'other. <strong>Left to pay in ' + MON_LONG[fromISO(todayISO()).getMonth()] + '</strong> ' +
+      'is what the bills landing this month still want — a bill you have marked paid is gone ' +
+      'from it. The line under it splits that in two: how much of it is ' +
+      '<strong>already set aside</strong>, and what is <strong>still to find</strong>. ' +
+      'Those two always add back to the first.</p>' +
+      '<p class="small mt"><strong>In your bill money now</strong> is the whole pot, this ' +
+      'month\'s bills and later ones together. It is the same figure as the one at the top of ' +
+      'the Bills tab — if they ever differ, one of them is wrong.</p>' +
+      '<p class="small dim mt">The <strong>Still to find</strong> figure in the stats above the ' +
+      'calendar counts every bill you track, not just this month\'s, which is why it is the ' +
+      'bigger number. Tap its <strong>?</strong> to see it bill by bill.</p></div>';
 
     html += '<div class="card tight"><div class="card-title">Free and clear</div>' +
       '<p class="small">The last card on the day is money <strong>no bill has a claim on</strong>. ' +
