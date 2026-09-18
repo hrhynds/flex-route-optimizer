@@ -22,7 +22,7 @@
 
   var STORE_KEY = 'billcushion.v1';
   var BACKUP_KEY = 'billcushion.lastgood';   // the state as of the last clean open
-  var APP_VERSION = '2026.09.17a';            // bump when shipping; shown under More
+  var APP_VERSION = '2026.09.18a';            // bump when shipping; shown under More
   var MS_DAY = 86400000;
   var DOW_LONG = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
   var DOW_MID = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
@@ -480,10 +480,41 @@
    *   actual    : what was actually set aside that day
    * Past/today use real contributions; future days assume the plan is followed.
    */
+  /**
+   * Move any row whose cycle is both paid for and past its due date on to the
+   * next round: the bill has been handed over, so it starts saving again.
+   *
+   * Without this the plan only ever funded the cycle running right now, and
+   * went quiet the moment that was covered — so a month whose bills had not
+   * come round yet looked free. October could say it cost $1,700 above a
+   * calendar asking for $25.
+   *
+   * A one-off never comes back, so advanceDue returns nothing and it stops.
+   */
+  function rollForward(rows, iso) {
+    for (var i = 0; i < rows.length; i++) {
+      var r = rows[i];
+      var guard = 0;
+      while (diffDays(r.due, iso) > 0 &&
+             round2(r.b.amount - r.saved) <= 0.004 &&
+             guard++ < 24) {
+        var nxt = advanceDue({ dueDate: r.due, recurrence: r.b.recurrence,
+                               anchorDay: r.b.anchorDay, scheduleDates: r.b.scheduleDates });
+        if (!nxt || nxt === r.due) break;
+        r.due = nxt;
+        r.target = cushionDateFor(nxt, cushionOf(r.b));
+        r.saved = 0;
+        r.ahead++;
+      }
+    }
+  }
+
   function simulate(startISO, endISO) {
     var bills = datedBills();
+    var today = todayISO();
     var rows = bills.map(function (b) {
-      return { b: b, target: targetDate(b), saved: savedFor(b, startISO) };
+      return { b: b, due: b.dueDate, target: targetDate(b),
+               saved: savedFor(b, startISO), ahead: 0 };
     });
     var out = {};
     var span = clamp(diffDays(startISO, endISO), 0, 800);
@@ -492,6 +523,12 @@
 
     for (var i = 0; i <= span; i++) {
       var funding = isFundingDay(iso);
+
+      // Only ever past today. Whether the bill sitting on today's due date has
+      // actually been handed over is something only you know, and money can
+      // only be filed against a cycle that really exists — so today's ask stays
+      // on the cycles in your data, and the projection runs ahead of it.
+      if (diffDays(today, iso) > 0) rollForward(rows, iso);
 
       // The day's ask is fixed at the start of the day...
       var planned = need(rows, iso, funding, step);
@@ -573,7 +610,8 @@
       items.push({
         billId: r.b.id, name: r.b.name, icon: r.b.icon,
         amount: round2(askToday), urgent: urgent,
-        remaining: remaining, fundingLeft: fundingLeft, target: r.target
+        remaining: remaining, fundingLeft: fundingLeft, target: r.target,
+        ahead: r.ahead || 0, due: r.due
       });
       total += askToday;
     }
@@ -635,6 +673,26 @@
     });
     out.sort(function (a, z) { return diffDays(z.date, a.date); });
     return out;
+  }
+
+  /**
+   * Bills whose date has come and gone without being marked paid.
+   *
+   * The plan now assumes a bill gets handed over on its due date and starts
+   * saving for the next round the day after. That assumption is only worth
+   * anything if the app tells you when it is waiting on you — otherwise it
+   * quietly projects a payment that never gets recorded, and goes on asking
+   * for a round you have not started.
+   */
+  function awaitingPayment() {
+    var t = todayISO();
+    return datedBills().filter(function (b) {
+      return diffDays(b.dueDate, t) >= 0;          // due today or already gone by
+    }).map(function (b) {
+      var saved = savedFor(b);
+      return { bill: b, saved: saved, short: round2(Math.max(0, b.amount - saved)),
+               late: diffDays(b.dueDate, t) };
+    }).sort(function (a, z) { return z.late - a.late; });
   }
 
   /** Today's snapshot, used all over the UI. */
@@ -740,6 +798,9 @@
     // pass 1 — cover what today asks for
     day.remaining.forEach(function (it) {
       if (left <= 0.004) return;
+      // A projected round has no cycle to file against yet. simulate() already
+      // keeps those off today, so this is a belt on top of braces.
+      if (it.ahead) return;
       var g = Math.min(it.amount, left);
       give(it.billId, g);
       left = round2(left - g);
@@ -1770,6 +1831,25 @@
       };
     },
 
+    waiting: function () {
+      var w = awaitingPayment();
+      return {
+        title: 'Why is it asking me about these?',
+        lead: 'Their due date has come round. The app cannot see your bank, so it does not ' +
+          'know whether the money has actually gone out — and until you say, it keeps ' +
+          'holding that money for this round instead of saving for the next one.',
+        rows: w.map(function (x) {
+          return [(x.bill.icon || '🧾') + ' ' + x.bill.name + ' — due ' + fmtDate(x.bill.dueDate),
+                  x.saved];
+        }),
+        total: ['Being held for bills already due',
+                round2(w.reduce(function (a, x) { return a + x.saved; }, 0))],
+        foot: 'Tap <strong>✓ Paid</strong> and that money leaves your bill money, the bill ' +
+          'starts saving for its next round, and the daily amount picks it up. The Plan tab ' +
+          'already assumes you will — which is why its days keep asking past this one.'
+      };
+    },
+
     tofind: function () {
       var list = sortedStatuses().filter(function (x) { return x.remaining > 0.004; });
       var rm = restOfMonth();
@@ -1814,7 +1894,9 @@
           (ask > 0.004
             ? ' The second figure on that row, <strong>' + money(ask) + '</strong>, ' +
               'is something else again: it is what the daily amounts add up to over the days ' +
-              'you have left this month. Some of that is a head start on next month.'
+              'you have left this month. The plan does not stop at the bill it is saving for ' +
+              'now — once a bill is due it starts on the next round — so that figure tracks ' +
+              'what the month costs rather than going quiet between bills.'
             : '')
       };
     },
@@ -1842,8 +1924,11 @@
               money(round2(list.reduce(function (a, x) { return a + x.amount; }, 0))) +
               ' is already paid and taken off. '
             : '') +
-            'The daily figure covers each bill a few days before it is due, which is why ' +
-            'it does not match this total.';
+            'The days on the calendar above should come to about this much: each bill is ' +
+            'saved for over the weeks before it lands, and starts again for the next round ' +
+            'once it is paid. They will not tie out to the penny — a bill near the start of ' +
+            'the month was part-funded last month, and one near the end is still being ' +
+            'funded into next.';
         })()
       };
     },
@@ -2111,6 +2196,28 @@
         '<button class="btn sm" data-act="pay-partner">Record a payment</button>' +
         '<button class="btn sm ghost" data-act="go-business">See the history</button>' +
         '</div></div>';
+    }
+
+    /* ---- bills the app is waiting on you to confirm ---- */
+    var waiting = awaitingPayment();
+    if (waiting.length) {
+      html += '<div class="card tight"><div class="card-title">' +
+        (waiting.length > 1 ? 'These bills have come due' : 'This bill has come due') +
+        why('waiting') + '</div>' +
+        '<div class="lr-sub">Tell the app once you have paid, and it starts saving for the ' +
+        'next round. Until then it keeps holding the money for this one.</div>';
+      waiting.forEach(function (w) {
+        html += '<div class="list-row"><div>' +
+          '<div>' + esc(w.bill.icon || '🧾') + ' ' + esc(w.bill.name) + '</div>' +
+          '<div class="lr-sub">due ' + fmtDate(w.bill.dueDate) +
+          (w.late > 0 ? ' · ' + plural(w.late, 'day') + ' ago' : ' · today') +
+          (w.short > 0.004
+            ? ' · still ' + money(w.short) + ' short'
+            : ' · ' + money(w.saved) + ' is set aside for it') + '</div></div>' +
+          '<button class="btn sm" data-act="mark-paid" data-id="' + w.bill.id + '">✓ Paid</button>' +
+          '</div>';
+      });
+      html += '</div>';
     }
 
     /* ---- the bill set-aside, still the thing that has to happen ---- */
@@ -4567,7 +4674,19 @@
           'more and it goes down. It always adds up to the same bills.</p>') +
       '<p class="small dim mt">"Days to spare" is your cushion: how many days you could ' +
       'skip and still pay on time. Use it all up and the bills still get paid — the ' +
-      'daily figure just climbs to catch up.</p></div>';
+      'daily figure just climbs to catch up.</p>' +
+      '<p class="small mt">It does not stop once a bill is covered. The day after a bill ' +
+      'is due, it starts saving for the <strong>next</strong> one — so the plan keeps ' +
+      'running instead of going quiet, and a month you have not reached yet is priced ' +
+      'properly rather than looking free.</p></div>';
+
+    html += '<div class="card tight"><div class="card-title">"This bill has come due"</div>' +
+      '<p class="small">The app cannot see your bank, so on the day a bill lands it asks ' +
+      'you. Tap <strong>✓ Paid</strong> and the money leaves your bill money and the next ' +
+      'round starts saving.</p>' +
+      '<p class="small dim mt">Until you do, it keeps holding that money for the bill in ' +
+      'front of it — which is right, but it means the daily amount sits lower than the plan ' +
+      'expects. That is the one thing the app needs from you to stay accurate.</p></div>';
 
     if (hasCut || hasTax) {
       html += '<div class="card tight"><div class="card-title">Money that is not yours</div>' +
