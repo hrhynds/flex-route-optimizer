@@ -178,9 +178,46 @@ to mean the same figure on every tab, or the app is lying somewhere.
 
 Its sub-line carries one more figure — *the days left in \<month\> ask for $X more* — and that
 is a third thing again: what the daily amounts on the calendar above add up to over the days
-you have left, which runs higher than this month's bills need because those days are already
-building toward next month's. It is read straight off the same cells the calendar draws, so
-the row and the calendar can't disagree, and its **?** spells out which figure is which.
+you have left. It is read straight off the same cells the calendar draws, so the row and the
+calendar can't disagree, and its **?** spells out which figure is which.
+
+### The plan doesn't stop at the round it's funding now
+
+Each bill is saved for one round at a time, and the day after a bill is due it starts saving
+for the next one. Without that, the plan went silent the moment the current round was
+covered — so a month whose bills hadn't come round yet looked free. October could say it
+cost $1,787 above a calendar asking for $25.
+
+```
+October 2026     calendar $1,727.97   month costs $1,822.18   ratio 0.95
+November 2026    calendar $1,711.78   month costs $1,653.12   ratio 1.04
+December 2026    calendar $1,721.25   month costs $1,653.12   ratio 1.04
+```
+
+A full month ahead now asks for what that month actually costs. They don't tie out to the
+penny and shouldn't: a bill landing near the 1st was part-funded the month before, and one
+landing near the 31st is still being funded into the next.
+
+The current month is the exception — its calendar only counts days from today forward, while
+its cost includes bills already past due. A one-off never re-arms; it's funded once and filed
+away.
+
+**Today is never projected forward.** Whether the bill sitting on today's due date has
+actually been handed over is something only you know, so today's figure stays on the rounds
+that exist in your data. Money can only be filed against a real round, which is also why
+`allocate` refuses a projected one outright.
+
+### "This bill has come due"
+
+The projection assumes a bill gets paid on its due date. That assumption is only worth
+anything if the app tells you when it's waiting on you, so Today carries a card listing every
+bill whose date has passed without being marked paid — how late it is, what's being held for
+it, and a **✓ Paid** button.
+
+Tap it and the money leaves the pot, the next round starts saving, and the daily amount picks
+it up. Leave it and the app keeps holding that money for the bill in front of it, which is
+correct but means the daily figure sits lower than the plan expects. It's the one thing the
+app needs from you that it can't work out on its own.
 
 Earlier versions put *already set aside this month* here as a running total of everything
 paid in during the month. That broke the moment you marked a bill paid: the money left the
