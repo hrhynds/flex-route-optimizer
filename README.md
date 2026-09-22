@@ -233,6 +233,33 @@ The **Still to find** stat above the calendar is a different figure on purpose: 
 every bill you track, in any month, which is why it's larger. Tap its **?** and it lists
 each bill with what it still needs — and explains why paying a bill makes it go *up*.
 
+### Backups
+
+Everything lives in `localStorage` on one device, so losing it is a real failure mode rather
+than a hypothetical. There are two layers, and they protect against different things.
+
+**Dated copies, kept automatically.** Every save writes a snapshot under
+`billcushion.snap.<date>` (throttled to one every two minutes), and the six most recent days
+are kept. An empty state never writes one, so opening a blank app can't push a real copy out.
+**More → On this device** lists them with their bill and job counts and restores any one.
+`billcushion.lastgood` — the state as of the last clean open — sits alongside them.
+
+These undo a bad edit, a bad day, or a bill deleted by mistake. They cannot survive the
+browser discarding the origin, because they go with it.
+
+**A copy off the phone, which is the one that matters.** iOS won't let a page write a file
+unprompted, so this is one tap: **💾 Back up now** hands a real `File` to `navigator.share`,
+and it lands in Files, iCloud or Notes. Where the share sheet isn't available it falls back to
+a download, then to copying the JSON.
+
+The app tracks when a copy last left the device and puts a banner on Today after seven days —
+harder after twenty-one, and from the start if there has never been one. *Later* snoozes it
+for the day only; there's no dismissing it for good. A cancelled share sheet is not recorded
+as a backup.
+
+**Erase everything** clears the snapshots and the fallback along with the live copy. Without
+that, erasing was undone by the next open offering it all back.
+
 ### When the ledger and the bank disagree
 
 Money gets spent, a day goes unlogged, a transfer lands late. **Set the real amount** on

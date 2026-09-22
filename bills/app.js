@@ -22,7 +22,7 @@
 
   var STORE_KEY = 'billcushion.v1';
   var BACKUP_KEY = 'billcushion.lastgood';   // the state as of the last clean open
-  var APP_VERSION = '2026.09.22a';            // bump when shipping; shown under More
+  var APP_VERSION = '2026.09.22b';            // bump when shipping; shown under More
   var MS_DAY = 86400000;
   var DOW_LONG = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
   var DOW_MID = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
@@ -167,7 +167,8 @@
         roundTo: 0.01,             // round the daily ask up to this step
         confirmMigrated: false,    // one-time move off the old automatic behaviour
         installDismissed: false,
-        lastBackup: null
+        lastBackup: null,
+        backupNagDay: null
       },
       bills: [],
       contributions: [],
@@ -285,14 +286,92 @@
     }
   }
 
+  /**
+   * A rolling set of dated copies, kept alongside the single last-clean-open
+   * one. Storage is cheap and the whole state is a few kilobytes, so there is
+   * no reason to hold only one: a bad write, a bad edit or a bad day all become
+   * recoverable, and each is labelled with the day it was taken.
+   *
+   * This cannot survive the browser throwing the whole origin away — nothing
+   * written here can. That is what the off-device backup is for.
+   */
+  var SNAP_PREFIX = 'billcushion.snap.';
+  var SNAP_KEEP = 6;
+  var SNAP_MAX = 600000;            // don't fill the quota with huge states
+  var lastSnap = 0;
+
+  function snapKeys() {
+    var keys = [];
+    try {
+      for (var i = 0; i < localStorage.length; i++) {
+        var k = localStorage.key(i);
+        if (k && k.indexOf(SNAP_PREFIX) === 0) keys.push(k);
+      }
+    } catch (e) { /* storage unavailable */ }
+    return keys.sort();             // ISO dates sort chronologically
+  }
+
+  function snapshot(force) {
+    // Nothing to protect, and never let an empty state push a real one out.
+    if (!state.bills.length && !state.jobs.length && !state.expenses.length) return;
+    var now = Date.now();
+    if (!force && now - lastSnap < 120000) return;
+    var payload;
+    try { payload = JSON.stringify(state); } catch (e) { return; }
+    if (payload.length > SNAP_MAX) return;
+    lastSnap = now;
+    try {
+      localStorage.setItem(SNAP_PREFIX + todayISO(), payload);
+    } catch (e) {
+      // out of room: drop the oldest and let the next save try again
+      var old = snapKeys();
+      if (old.length) { try { localStorage.removeItem(old[0]); } catch (e2) {} }
+      return;
+    }
+    var keys = snapKeys();
+    while (keys.length > SNAP_KEEP) {
+      try { localStorage.removeItem(keys.shift()); } catch (e3) { break; }
+    }
+  }
+
+  /**
+   * Every copy this device is holding, richest-looking first, so a restore can
+   * offer a real choice rather than a single take-it-or-leave-it.
+   */
+  function recoveryCopies() {
+    var out = [];
+    var add = function (key, raw, label, date) {
+      if (!raw) return;
+      try {
+        var d = JSON.parse(raw);
+        if (!d || !Array.isArray(d.bills)) return;
+        out.push({ key: key, raw: raw, data: d, label: label, date: date,
+                   bills: d.bills.length, jobs: (d.jobs || []).length });
+      } catch (e) { /* skip anything unreadable */ }
+    };
+    try { add(BACKUP_KEY, localStorage.getItem(BACKUP_KEY), 'Last clean open', null); } catch (e) {}
+    snapKeys().forEach(function (k) {
+      var iso = k.slice(SNAP_PREFIX.length);
+      try { add(k, localStorage.getItem(k), fmtDate(iso), iso); } catch (e) {}
+    });
+    out.sort(function (a, z) {
+      if (a.date && z.date) return diffDays(a.date, z.date);
+      return (z.bills + z.jobs) - (a.bills + a.jobs);
+    });
+    return out;
+  }
+
   /** Is there a usable fallback copy? */
   function lastGood() {
     try {
       var raw = localStorage.getItem(BACKUP_KEY);
-      if (!raw) return null;
-      var d = JSON.parse(raw);
-      return d && Array.isArray(d.bills) ? { raw: raw, data: d } : null;
-    } catch (e) { return null; }
+      if (raw) {
+        var d = JSON.parse(raw);
+        if (d && Array.isArray(d.bills)) return { raw: raw, data: d };
+      }
+    } catch (e) { /* fall through to the dated copies */ }
+    var all = recoveryCopies();
+    return all.length ? { raw: all[0].raw, data: all[0].data } : null;
   }
 
   var syncing = false;
@@ -317,6 +396,7 @@
     if (!saveWorks) {
       toast('⚠️ This browser is not saving — see More for how to fix it');
     }
+    snapshot();
   }
 
   /* ---------------------------------------------------------------------------
@@ -2020,6 +2100,25 @@
         'browsing tab — open the app in a normal tab instead. See More for the details.</div></div>';
     }
 
+    // A copy that never leaves the phone is not a backup. Say so, and keep
+    // saying it — snoozable for the day, never for good.
+    var age = backupAge();
+    var nagged = state.settings.backupNagDay === t;
+    if (!nagged && (age === null || age >= 7)) {
+      var hard = age === null || age >= 21;
+      html += '<div class="banner ' + (hard ? 'bad' : 'warn') + '"><span>💾</span>' +
+        '<div><strong>' + (age === null
+          ? 'Your bills have never been backed up'
+          : plural(age, 'day') + ' since your last backup') + '</strong>' +
+        'Everything lives on this phone only. If the browser clears its site data ' +
+        'it all goes, and nothing in the app can bring it back. One tap saves a copy ' +
+        'to Files or iCloud.' +
+        '<div class="btn-row mt"><button class="btn sm primary" data-act="share-backup">' +
+        '💾 Back up now</button>' +
+        '<button class="btn sm ghost" data-act="snooze-backup">Later</button></div>' +
+        '</div></div>';
+    }
+
     var undated = undatedBills();
     if (undated.length) {
       html += '<div class="banner warn"><span>📅</span><div><strong>' +
@@ -3170,21 +3269,24 @@
       'save a backup file somewhere safe now and then.' +
       (s.lastBackup ? ' <strong>Last backup: ' + fmtDate(s.lastBackup) + '</strong>.' : ' <strong>You haven\'t backed up yet.</strong>') +
       '</p>' +
-      '<div class="btn-row mb"><button class="btn" data-act="export">⬇︎ Save backup</button>' +
+      '<div class="btn-row mb"><button class="btn primary" data-act="share-backup">💾 Back up now</button>' +
       '<button class="btn" data-act="copy-backup">⧉ Copy</button></div>' +
       '<button class="btn ghost" data-act="import">📋 Paste a setup code or backup</button>' +
       (function () {
-        // The app keeps a copy from the last clean open. Say so, and let it be
-        // put back at any time — not only in the moment the app notices.
-        var g = lastGood();
-        if (!g) return '';
-        return '<div class="sep"></div><p class="small dim mb">This device also holds a ' +
-          'copy from the last time the app opened with your data in it — ' +
-          '<strong>' + plural(g.data.bills.length, 'bill') + '</strong>' +
-          (g.data.jobs && g.data.jobs.length
-            ? ', ' + plural(g.data.jobs.length, 'job') : '') +
-          '. If anything ever goes missing, put it back from here.</p>' +
-          '<button class="btn" data-act="restore-lastgood">↩︎ Restore that copy</button>';
+        // The app keeps dated copies of its own. They cannot survive the browser
+        // dropping the whole site, but they undo a bad edit or a bad day.
+        var all = recoveryCopies();
+        if (!all.length) return '';
+        return '<div class="sep"></div><div class="card-title">On this device</div>' +
+          '<p class="small dim mb">Saved automatically as you go. These go with the rest ' +
+          'if site data is ever cleared — the backup above is the one that survives that.</p>' +
+          all.map(function (c, i) {
+            return '<div class="list-row"><div><div>' + esc(c.label) + '</div>' +
+              '<div class="lr-sub">' + plural(c.bills, 'bill') +
+              (c.jobs ? ' · ' + plural(c.jobs, 'job') : '') + '</div></div>' +
+              '<button class="btn sm" data-act="restore-copy" data-key="' + esc(c.key) + '">' +
+              (i === 0 ? '↩︎ Restore' : 'Restore') + '</button></div>';
+          }).join('');
       })() + '</div>';
 
     html += '<div class="card"><div class="card-title">How the numbers are worked out</div>' +
@@ -4232,6 +4334,41 @@
      9. Backup / restore
      ------------------------------------------------------------------------ */
 
+  function markBackedUp() {
+    state.settings.lastBackup = todayISO();
+    state.settings.backupNagDay = null;
+    save(); render();
+  }
+
+  /** How long since a copy last left this device. null = never. */
+  function backupAge() {
+    var lb = state.settings.lastBackup;
+    return lb ? diffDays(lb, todayISO()) : null;
+  }
+
+  /**
+   * The only kind of backup that survives the browser dropping the site: one
+   * that leaves the phone. iOS will not let a page write a file on its own, so
+   * this is one tap — the share sheet, straight into Files, iCloud or Notes.
+   */
+  function shareBackup() {
+    var name = 'ledger-backup-' + todayISO() + '.json';
+    var text = JSON.stringify(state, null, 2);
+    try {
+      var file = new File([text], name, { type: 'application/json' });
+      if (navigator.share && navigator.canShare && navigator.canShare({ files: [file] })) {
+        navigator.share({ files: [file], title: name }).then(function () {
+          markBackedUp();
+          toast('✅ Backed up — keep that file somewhere you can find it');
+        }, function () {
+          // cancelled, or the sheet refused it: not a backup, so do not claim one
+        });
+        return;
+      }
+    } catch (e) { /* no File, no share: fall back to a download */ }
+    exportData();
+  }
+
   function exportData() {
     var text = JSON.stringify(state, null, 2);
     var name = 'bill-cushion-backup-' + todayISO() + '.json';
@@ -4776,8 +4913,15 @@
       'already spent.</p></div>';
 
     html += '<div class="card tight"><div class="card-title">If anything ever goes missing</div>' +
-      '<p class="small"><strong>More → Copy my setup code</strong>. Keep it in Notes. ' +
-      'Pasting it back rebuilds every bill in one go.</p></div>';
+      '<p class="small">The app keeps <strong>dated copies of itself on this phone</strong>, ' +
+      'saved as you go. A bad edit, a bad day, a bill deleted by mistake — ' +
+      '<strong>More → On this device</strong> lists them and puts any one back.</p>' +
+      '<p class="small mt">Those copies cannot save you from one thing: the browser ' +
+      'throwing the whole site away. Nothing stored on the phone can, because it goes ' +
+      'too. That is what <strong>💾 Back up now</strong> is for — one tap hands a file to ' +
+      'the share sheet and you keep it in Files, iCloud or Notes, off the phone.</p>' +
+      '<p class="small dim mt">The app asks you to do that every week or so, and says how ' +
+      'long it has been. It is the only step it cannot do for you.</p></div>';
 
     html += '<button class="btn ghost" data-act="close-sheet">Got it</button>';
     openSheet(html);
@@ -5166,8 +5310,19 @@
       case 'export': exportData(); break;
       case 'copy-backup': copyBackup(); break;
 
+      case 'share-backup': shareBackup(); break;
+
+      case 'snooze-backup':
+        state.settings.backupNagDay = todayISO(); save(); render(); break;
+
+      case 'restore-copy':
       case 'restore-lastgood': {
-        var g = lastGood();
+        var g = null;
+        if (t.dataset.key) {
+          var pick = recoveryCopies().filter(function (c) { return c.key === t.dataset.key; })[0];
+          if (pick) g = { raw: pick.raw, data: pick.data };
+        }
+        if (!g) g = lastGood();
         if (!g) { toast('No copy to restore from'); break; }
         confirmSheet({
           title: 'Put back ' + plural(g.data.bills.length, 'bill') + '?',
@@ -5195,8 +5350,11 @@
           actions: [{
             label: 'Erase all data', cls: 'danger', fn: function () {
               localStorage.removeItem(STORE_KEY);
-              // the fallback copy as well, or the app offers it straight back
+              // the fallback copies as well, or the app offers it straight back
               try { localStorage.removeItem(BACKUP_KEY); } catch (e) {}
+              snapKeys().forEach(function (k) {
+                try { localStorage.removeItem(k); } catch (e2) {}
+              });
               state = defaults(); save(); view = 'today'; render();
               toast('Everything erased');
             }
