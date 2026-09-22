@@ -22,7 +22,7 @@
 
   var STORE_KEY = 'billcushion.v1';
   var BACKUP_KEY = 'billcushion.lastgood';   // the state as of the last clean open
-  var APP_VERSION = '2026.09.18a';            // bump when shipping; shown under More
+  var APP_VERSION = '2026.09.22a';            // bump when shipping; shown under More
   var MS_DAY = 86400000;
   var DOW_LONG = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
   var DOW_MID = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
@@ -3172,7 +3172,20 @@
       '</p>' +
       '<div class="btn-row mb"><button class="btn" data-act="export">⬇︎ Save backup</button>' +
       '<button class="btn" data-act="copy-backup">⧉ Copy</button></div>' +
-      '<button class="btn ghost" data-act="import">📋 Paste a setup code or backup</button></div>';
+      '<button class="btn ghost" data-act="import">📋 Paste a setup code or backup</button>' +
+      (function () {
+        // The app keeps a copy from the last clean open. Say so, and let it be
+        // put back at any time — not only in the moment the app notices.
+        var g = lastGood();
+        if (!g) return '';
+        return '<div class="sep"></div><p class="small dim mb">This device also holds a ' +
+          'copy from the last time the app opened with your data in it — ' +
+          '<strong>' + plural(g.data.bills.length, 'bill') + '</strong>' +
+          (g.data.jobs && g.data.jobs.length
+            ? ', ' + plural(g.data.jobs.length, 'job') : '') +
+          '. If anything ever goes missing, put it back from here.</p>' +
+          '<button class="btn" data-act="restore-lastgood">↩︎ Restore that copy</button>';
+      })() + '</div>';
 
     html += '<div class="card"><div class="card-title">How the numbers are worked out</div>' +
       '<p class="small dim">For every bill:</p>' +
@@ -4524,8 +4537,14 @@
    * Never silently present an empty app to someone who had data in it.
    */
   function offerRecovery() {
-    if (loadState !== 'corrupt') return;
+    if (loadState !== 'corrupt' && loadState !== 'empty') return;
     var good = lastGood();
+    // An empty store used to slip through here and open a blank app, even with
+    // a perfectly good backup sitting beside it. If a device loses the main
+    // copy — cleared site data, storage evicted — the fallback is the whole
+    // point of keeping one, so offer it.
+    if (loadState === 'empty' && (!good || state.settings.rescueDismissed)) return;
+    var lost = loadState === 'empty';
 
     var actions = [];
     if (good) {
@@ -4540,12 +4559,15 @@
       });
     }
     actions.push({
-      label: 'Start fresh',
+      label: lost ? 'Start fresh instead' : 'Start fresh',
       cls: good ? '' : 'primary',
       fn: function () {
         state = defaults();
+        // Answered, so stop asking on every open — but never destroy the copy
+        // over a single tap. It stays under More for as long as it is there.
+        if (lost) state.settings.rescueDismissed = true;
         loadState = 'empty'; save(); render();
-        toast('Started fresh');
+        toast(lost ? 'Started fresh — the old copy is still under More' : 'Started fresh');
       }
     });
     actions.push({
@@ -4554,9 +4576,13 @@
     });
 
     confirmSheet({
-      title: 'Your saved data could not be read',
-      body: 'Something went wrong with the copy stored on this device. ' +
-        '<strong>Nothing has been deleted</strong> — it is still there, just unreadable.' +
+      title: lost ? 'Your bills are missing from this device'
+                  : 'Your saved data could not be read',
+      body: (lost
+        ? 'This device has no saved data any more — site data cleared, storage ' +
+          'reclaimed by the browser, or a different browser than the one you set it up in. '
+        : 'Something went wrong with the copy stored on this device. ' +
+          '<strong>Nothing has been deleted</strong> — it is still there, just unreadable.') +
         (good
           ? '<br><br>There is a clean copy from the last time the app opened properly.'
           : '<br><br>There is no fallback copy, so a setup code is the quickest way back.'),
@@ -5139,6 +5165,27 @@
 
       case 'export': exportData(); break;
       case 'copy-backup': copyBackup(); break;
+
+      case 'restore-lastgood': {
+        var g = lastGood();
+        if (!g) { toast('No copy to restore from'); break; }
+        confirmSheet({
+          title: 'Put back ' + plural(g.data.bills.length, 'bill') + '?',
+          body: 'This replaces what is on the device now with the copy saved the last ' +
+            'time the app opened with your data in it. Copy a backup first if there is ' +
+            'anything here you want to keep.',
+          actions: [{
+            label: 'Restore that copy', cls: 'primary', fn: function () {
+              try { localStorage.setItem(STORE_KEY, g.raw); } catch (e) {}
+              loadState = 'empty'; load();
+              state.settings.rescueDismissed = false;
+              save(); view = 'bills'; render();
+              toast('✅ Restored ' + plural(state.bills.length, 'bill'));
+            }
+          }]
+        });
+        break;
+      }
       case 'import': importData(); break;
 
       case 'reset':
@@ -5148,6 +5195,8 @@
           actions: [{
             label: 'Erase all data', cls: 'danger', fn: function () {
               localStorage.removeItem(STORE_KEY);
+              // the fallback copy as well, or the app offers it straight back
+              try { localStorage.removeItem(BACKUP_KEY); } catch (e) {}
               state = defaults(); save(); view = 'today'; render();
               toast('Everything erased');
             }
