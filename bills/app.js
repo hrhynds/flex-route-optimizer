@@ -22,7 +22,7 @@
 
   var STORE_KEY = 'billcushion.v1';
   var BACKUP_KEY = 'billcushion.lastgood';   // the state as of the last clean open
-  var APP_VERSION = '2026.09.22b';            // bump when shipping; shown under More
+  var APP_VERSION = '2026.09.23a';            // bump when shipping; shown under More
   var MS_DAY = 86400000;
   var DOW_LONG = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
   var DOW_MID = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
@@ -168,9 +168,26 @@
         confirmMigrated: false,    // one-time move off the old automatic behaviour
         installDismissed: false,
         lastBackup: null,
-        backupNagDay: null
+        backupNagDay: null,
+        income: {
+          mode: 'jobs',          // 'jobs' = paid per job; 'hourly' = paid a wage
+          rate: 0,               // $ an hour
+          state: '',             // two-letter code, '' = not set
+          filing: 'single',      // single | married | head
+          annual: null,          // expected gross for the year; null = work it out
+          period: 'biweekly',    // weekly | biweekly | semimonthly | monthly
+          payday: null,          // a real payday, to count the others from
+          lag: 5,                // days between the end of the work period and payday
+          otAfter: 40,           // hours in a week before overtime
+          otMult: 1.5,
+          preTax: 0,             // taken out before tax each paycheck (401k, health)
+          postTax: 0,            // taken out after tax each paycheck
+          stateRate: null,       // override the table
+          calib: null            // { gross, net, on } from a real payslip — beats any table
+        }
       },
       bills: [],
+      shifts: [],                  // hours worked { id, date, hours, note, ts }
       contributions: [],
       days: {},                    // iso -> { completed, skipped, planned, at }
       overrides: { work: [], off: [] },
@@ -241,12 +258,16 @@
         jobs: Array.isArray(d.jobs) ? d.jobs : [],
         expenses: Array.isArray(d.expenses) ? d.expenses : [],
         payouts: Array.isArray(d.payouts) ? d.payouts : [],
+        shifts: Array.isArray(d.shifts) ? d.shifts : [],
         meta: Object.assign(base.meta, d.meta || {})
       };
       // a v1 backup has no partner block of its own
       state.settings.partner = Object.assign(
         { name: 'Logan', mode: 'none', value: 0 },
         (d.settings && d.settings.partner) || {}
+      );
+      state.settings.income = Object.assign(
+        base.settings.income, (d.settings && d.settings.income) || {}
       );
       state.bills.forEach(function (b) {
         if (b.cycle == null) b.cycle = 0;
@@ -958,7 +979,13 @@
   function sum(list, key) {
     return round2(list.reduce(function (a, x) { return a + (+x[key || 'amount'] || 0); }, 0));
   }
-  function revenueOn(iso) { return sum(jobsOn(iso)); }
+  // Paid by the hour, the day's takings are what those hours are worth after
+  // the employer's deductions — that is the money that reaches the bank, and
+  // the bills are paid out of it. Per-job work stays gross, with tax set aside
+  // separately, because nobody has withheld anything for you.
+  function revenueOn(iso) {
+    return round2(sum(jobsOn(iso)) + (isHourly() ? netOn(iso) : 0));
+  }
   function costsOn(iso) { return sum(expensesOn(iso)); }
 
   function partnerRate() { return clamp((state.settings.partner || {}).value || 0, 0, 95) / 100; }
@@ -1045,6 +1072,248 @@
   }
 
   /** The whole chain for one day. */
+  /* ---------------------------------------------------------------------------
+     4b. Paid by the hour
+     ---------------------------------------------------------------------------
+     A wage is not a job that pays $150 in cash. You earn it by the hour, the
+     employer keeps back the tax, and what lands in the bank arrives in a lump
+     every week or fortnight. So the app has to answer a different question:
+     how much of this paycheck is actually going to show up?
+
+     The tables below are the 2026 federal ones and an estimated state rate.
+     They get you close. What gets you exact is telling the app about one real
+     payslip — calibrate() then uses your own withholding and ignores the
+     tables entirely, W-4, health plan, local tax and all.
+     ------------------------------------------------------------------------ */
+
+  // IRS Rev. Proc. 2025-32 — brackets on taxable income, after the deduction.
+  var FED2026 = {
+    single:  { sd: 16100, bands: [[12400, .10], [50400, .12], [105700, .22],
+                                  [201775, .24], [256225, .32], [640600, .35], [Infinity, .37]] },
+    married: { sd: 32200, bands: [[24800, .10], [100800, .12], [211400, .22],
+                                  [403550, .24], [512450, .32], [768700, .35], [Infinity, .37]] },
+    head:    { sd: 24150, bands: [[17700, .10], [67450, .12], [105700, .22],
+                                  [201775, .24], [256200, .32], [640600, .35], [Infinity, .37]] }
+  };
+  var SS_BASE = 184500, SS_RATE = .062, MED_RATE = .0145, MED_MORE = .009, MED_OVER = 200000;
+
+  // A rate per state, picked for what an hourly wage actually lands in rather
+  // than the headline top rate. An estimate, and overridable — the label on
+  // screen says so, and a real payslip overrides the lot.
+  var STATES = [
+    ['AL', 'Alabama', .050], ['AK', 'Alaska', 0], ['AZ', 'Arizona', .025],
+    ['AR', 'Arkansas', .039], ['CA', 'California', .060], ['CO', 'Colorado', .044],
+    ['CT', 'Connecticut', .050], ['DE', 'Delaware', .052], ['DC', 'Washington DC', .060],
+    ['FL', 'Florida', 0], ['GA', 'Georgia', .0519], ['HI', 'Hawaii', .076],
+    ['ID', 'Idaho', .053], ['IL', 'Illinois', .0495], ['IN', 'Indiana', .0295],
+    ['IA', 'Iowa', .038], ['KS', 'Kansas', .0558], ['KY', 'Kentucky', .035],
+    ['LA', 'Louisiana', .030], ['ME', 'Maine', .0675], ['MD', 'Maryland', .0475],
+    ['MA', 'Massachusetts', .050], ['MI', 'Michigan', .0425], ['MN', 'Minnesota', .068],
+    ['MS', 'Mississippi', .040], ['MO', 'Missouri', .040], ['MT', 'Montana', .0565],
+    ['NE', 'Nebraska', .0455], ['NV', 'Nevada', 0], ['NH', 'New Hampshire', 0],
+    ['NJ', 'New Jersey', .035], ['NM', 'New Mexico', .049], ['NY', 'New York', .055],
+    ['NC', 'North Carolina', .0399], ['ND', 'North Dakota', .0195], ['OH', 'Ohio', .0275],
+    ['OK', 'Oklahoma', .045], ['OR', 'Oregon', .0875], ['PA', 'Pennsylvania', .0307],
+    ['RI', 'Rhode Island', .0475], ['SC', 'South Carolina', .060], ['SD', 'South Dakota', 0],
+    ['TN', 'Tennessee', 0], ['TX', 'Texas', 0], ['UT', 'Utah', .045],
+    ['VT', 'Vermont', .066], ['VA', 'Virginia', .0575], ['WA', 'Washington', 0],
+    ['WV', 'West Virginia', .0482], ['WI', 'Wisconsin', .044], ['WY', 'Wyoming', 0]
+  ];
+  // states that tax nothing under a threshold — big enough on a wage to matter
+  var STATE_FREE = { OH: 26050 };
+
+  function inc() { return state.settings.income || {}; }
+  function isHourly() { return inc().mode === 'hourly'; }
+  function stateRow(code) {
+    for (var i = 0; i < STATES.length; i++) if (STATES[i][0] === code) return STATES[i];
+    return null;
+  }
+  function stateName(code) { var r = stateRow(code); return r ? r[1] : ''; }
+  function stateRate(code) {
+    var o = inc();
+    if (o.stateRate != null) return clamp(o.stateRate, 0, 20) / 100;
+    var r = stateRow(code);
+    return r ? r[2] : 0;
+  }
+  function periodsPerYear(p) {
+    return p === 'weekly' ? 52 : p === 'semimonthly' ? 24 : p === 'monthly' ? 12 : 26;
+  }
+  function periodWords(p) {
+    return p === 'weekly' ? 'every week' : p === 'semimonthly' ? 'twice a month'
+      : p === 'monthly' ? 'once a month' : 'every two weeks';
+  }
+
+  /** Progressive federal tax on a year's taxable income. */
+  function fedTaxOn(taxable, filing) {
+    var t = FED2026[filing] || FED2026.single;
+    var left = Math.max(0, taxable), last = 0, owed = 0;
+    for (var i = 0; i < t.bands.length && left > 0; i++) {
+      var top = t.bands[i][0], rate = t.bands[i][1];
+      var slice = Math.min(left, top - last);
+      owed += slice * rate;
+      left -= slice; last = top;
+    }
+    return owed;
+  }
+
+  /** Every deduction a year of this wage would attract, itemised. */
+  function yearTax(gross, o) {
+    o = o || inc();
+    var filing = FED2026[o.filing] ? o.filing : 'single';
+    var preYear = round2((+o.preTax || 0) * periodsPerYear(o.period));
+    var wages = Math.max(0, gross - preYear);
+    var fed = fedTaxOn(Math.max(0, wages - FED2026[filing].sd), filing);
+    var ss = Math.min(wages, SS_BASE) * SS_RATE;
+    var med = wages * MED_RATE + Math.max(0, wages - MED_OVER) * MED_MORE;
+    var free = STATE_FREE[o.state] || 0;
+    var st = Math.max(0, wages - free) * stateRate(o.state);
+    var postYear = round2((+o.postTax || 0) * periodsPerYear(o.period));
+    return {
+      gross: round2(gross), preTax: preYear, postTax: postYear,
+      fed: round2(fed), ss: round2(ss), med: round2(med), state: round2(st),
+      total: round2(fed + ss + med + st + preYear + postYear),
+      net: round2(gross - fed - ss - med - st - preYear - postYear)
+    };
+  }
+
+  /** What a year of this looks like, from the hours logged or from what you told it. */
+  function expectedYear() {
+    var o = inc();
+    if (o.annual > 0) return round2(o.annual);
+    // project from what has actually been worked, once there is enough to mean
+    // anything — a single day is not a year.
+    var all = state.shifts || [];
+    if (!all.length || !(o.rate > 0)) return 0;
+    var dates = all.map(function (x) { return x.date; }).sort();
+    var span = Math.max(7, diffDays(dates[0], todayISO()) + 1);
+    var hrs = all.reduce(function (a, x) { return a + (+x.hours || 0); }, 0);
+    return round2(hrs / span * 365 * o.rate);
+  }
+
+  /**
+   * The share of a paycheck that survives to the bank.
+   * A real payslip wins outright: it already knows your W-4, your health plan
+   * and any city tax no table here has heard of.
+   */
+  function keepRate() {
+    var o = inc();
+    if (o.calib && o.calib.gross > 0 && o.calib.net >= 0) {
+      return clamp(o.calib.net / o.calib.gross, 0, 1);
+    }
+    var year = expectedYear();
+    if (!(year > 0)) return 1;
+    var t = yearTax(year, o);
+    return clamp(t.net / year, 0, 1);
+  }
+  function isCalibrated() { var c = inc().calib; return !!(c && c.gross > 0); }
+
+  /* ---- the hours themselves ---- */
+
+  function shiftsOn(iso) {
+    return (state.shifts || []).filter(function (x) { return x.date === iso; });
+  }
+  function hoursOn(iso) {
+    return round2(shiftsOn(iso).reduce(function (a, x) { return a + (+x.hours || 0); }, 0));
+  }
+  /** Monday-start week containing a date, so overtime is counted the way payroll does. */
+  function weekStart(iso) {
+    var d = fromISO(iso), dow = d.getDay();
+    return addDays(iso, dow === 0 ? -6 : 1 - dow);
+  }
+  function hoursInWeek(iso) {
+    var start = weekStart(iso), n = 0;
+    for (var i = 0; i < 7; i++) n += hoursOn(addDays(start, i));
+    return round2(n);
+  }
+  /**
+   * Gross for one day's hours, with overtime priced at the point in the week
+   * the day actually falls — the 9th hour of a 48-hour week is overtime, the
+   * same hour in a 30-hour week is not.
+   */
+  function grossOn(iso) {
+    var o = inc();
+    if (!isHourly() || !(o.rate > 0)) return 0;
+    var todayHrs = hoursOn(iso);
+    if (!todayHrs) return 0;
+    var start = weekStart(iso), before = 0;
+    for (var i = 0; i < 7; i++) {
+      var d = addDays(start, i);
+      if (d === iso) break;
+      before += hoursOn(d);
+    }
+    var cap = Math.max(0, (+o.otAfter || 40) - before);
+    var plain = Math.min(todayHrs, cap);
+    var over = Math.max(0, todayHrs - plain);
+    return round2(plain * o.rate + over * o.rate * (+o.otMult || 1.5));
+  }
+  /** What that day is worth once the employer has taken its cut. */
+  function netOn(iso) { return round2(grossOn(iso) * keepRate()); }
+
+  /* ---- pay periods ---- */
+
+  /**
+   * The work period covering a date, and the day it gets paid.
+   * Counted from a payday you told it about, so it lines up with your real
+   * calendar instead of an arbitrary one.
+   */
+  function payPeriod(iso) {
+    var o = inc();
+    var lag = Math.max(0, +o.lag || 0);
+    var end, start, pay;
+    if (o.period === 'monthly') {
+      var d = fromISO(iso);
+      start = toISO(new Date(d.getFullYear(), d.getMonth(), 1));
+      end = toISO(new Date(d.getFullYear(), d.getMonth() + 1, 0));
+    } else if (o.period === 'semimonthly') {
+      var dd = fromISO(iso), day = dd.getDate();
+      if (day <= 15) {
+        start = toISO(new Date(dd.getFullYear(), dd.getMonth(), 1));
+        end = toISO(new Date(dd.getFullYear(), dd.getMonth(), 15));
+      } else {
+        start = toISO(new Date(dd.getFullYear(), dd.getMonth(), 16));
+        end = toISO(new Date(dd.getFullYear(), dd.getMonth() + 1, 0));
+      }
+    } else {
+      var len = o.period === 'weekly' ? 7 : 14;
+      // Anchor on the work period that ends `lag` days before a known payday,
+      // then step to the period *containing* this date — the first one whose
+      // end falls on or after it. Stepping to the one after instead left the
+      // date outside its own pay period, which showed a paycheck of nothing.
+      var anchorEnd = o.payday ? addDays(o.payday, -lag) : todayISO();
+      var steps = Math.ceil(diffDays(anchorEnd, iso) / len);
+      end = addDays(anchorEnd, steps * len);
+      start = addDays(end, -(len - 1));
+    }
+    pay = addDays(end, lag);
+    return { start: start, end: end, pay: pay };
+  }
+
+  /** Hours and money for one pay period. */
+  function periodPay(p) {
+    var hrs = 0, gross = 0;
+    var span = clamp(diffDays(p.start, p.end), 0, 40);
+    var iso = p.start;
+    for (var i = 0; i <= span; i++) {
+      hrs += hoursOn(iso);
+      gross += grossOn(iso);
+      iso = addDays(iso, 1);
+    }
+    gross = round2(gross);
+    var keep = keepRate();
+    return { start: p.start, end: p.end, pay: p.pay, hours: round2(hrs),
+             gross: gross, net: round2(gross * keep), keep: keep };
+  }
+
+  /** This period and the one before it, which is usually the one about to land. */
+  function thisPay() { return periodPay(payPeriod(todayISO())); }
+  function nextPayday() {
+    var t = todayISO(), p = payPeriod(t);
+    // the period you are in pays later; a finished one may pay sooner
+    var prev = periodPay(payPeriod(addDays(p.start, -1)));
+    if (diffDays(t, prev.pay) >= 0) return prev;
+    return periodPay(p);
+  }
+
   function dayMoney(iso) {
     var rev = revenueOn(iso);
     var cost = costsOn(iso);
@@ -1071,7 +1340,10 @@
       billsShort: day ? day.remainingTotal : 0,
       // what today's takings are still asked to cover
       billsAsk: owed,
-      jobs: jobsOn(iso).length,
+      // Hours count as work logged. Without this a day of wage work reads as
+      // an empty day: the hero shows the break-even instead of what you made.
+      jobs: jobsOn(iso).length + (isHourly() ? shiftsOn(iso).length : 0),
+      hours: isHourly() ? hoursOn(iso) : 0,
       // what the work itself made you, before any bill money moves
       earned: spare,
       takeHome: round2(spare - toBills)
@@ -1911,6 +2183,43 @@
       };
     },
 
+    paycheck: function () {
+      var o = inc(), nx = nextPayday(), year = expectedYear();
+      var rows = [['Hours × ' + money(o.rate), nx.gross]];
+      var foot;
+      if (isCalibrated()) {
+        foot = 'Worked out from the payslip you gave it: ' + money(o.calib.gross) +
+          ' gross, ' + money(o.calib.net) + ' landed, so <strong>' +
+          Math.round(100 * nx.keep) + '%</strong> survives. That beats any table, because ' +
+          'it already knows your W-4, your health plan and any city tax.';
+        rows.push(['Everything withheld, at ' + Math.round(100 * (1 - nx.keep)) + '%',
+                   -round2(nx.gross - nx.net)]);
+      } else if (year > 0) {
+        var t = yearTax(year, o), f = nx.gross / year;
+        if (t.preTax > 0.004) rows.push(['Before-tax deductions', -round2(t.preTax * f)]);
+        rows.push(['Federal income tax', -round2(t.fed * f)]);
+        rows.push(['Social Security (6.2%)', -round2(t.ss * f)]);
+        rows.push(['Medicare (1.45%)', -round2(t.med * f)]);
+        if (t.state > 0.004) rows.push([stateName(o.state) + ' tax', -round2(t.state * f)]);
+        if (t.postTax > 0.004) rows.push(['After-tax deductions', -round2(t.postTax * f)]);
+        foot = 'Spread from a year at about ' + money(year) + ', using the 2026 federal ' +
+          'tables and an estimated rate for ' + (o.state ? esc(stateName(o.state)) : 'your state') +
+          '. It cannot know your W-4 or your health plan, so it will be a little out. ' +
+          '<strong>Put one real payslip in under More and it stops guessing.</strong>';
+      } else {
+        foot = 'Log some hours, or fill in what you expect to make this year, and this ' +
+          'becomes a real estimate rather than a blank.';
+      }
+      return {
+        title: 'Where does that paycheck come from?',
+        lead: plural(nx.hours, 'hour') + ' between ' + fmtDate(nx.start) + ' and ' +
+          fmtDate(nx.end) + ', landing ' + fmtDate(nx.pay) + '.',
+        rows: rows,
+        total: ['What should land', nx.net],
+        foot: foot
+      };
+    },
+
     waiting: function () {
       var w = awaitingPayment();
       return {
@@ -2080,7 +2389,10 @@
     var t = todayISO();
     var bills = activeBills();
 
-    if (!bills.length && !state.jobs.length && !state.expenses.length) {
+    // Hours count as having started. Without this, someone paid a wage who has
+    // logged a week of shifts but no bills yet still sees the welcome screen.
+    if (!bills.length && !state.jobs.length && !state.expenses.length &&
+        !(state.shifts || []).length) {
       host.innerHTML = welcomeHTML();
       return;
     }
@@ -2131,17 +2443,19 @@
     var cls = 'hero', eyebrow, amount, sub;
     if (!m.jobs && !m.costs) {
       cls += ' is-off';
-      eyebrow = 'No jobs yet today';
+      eyebrow = isHourly() ? 'No hours yet today' : 'No jobs yet today';
       amount = be != null ? money(be) : '—';
       sub = be != null
         ? 'what today needs to make to cover it all'
-        : 'tap ＋ Job when you finish one';
+        : (isHourly() ? 'tap ＋ Hours when you have worked' : 'tap ＋ Job when you finish one');
     } else if (m.takeHome >= 0) {
       eyebrow = 'You keep today';
       amount = money(m.takeHome);
       // A hard day's work can still end at $0 kept. Say where it went rather
       // than leaving a bare zero to be puzzled over.
-      sub = money(m.revenue) + ' in across ' + plural(m.jobs, 'job');
+      sub = money(m.revenue) + ' in' + (isHourly()
+        ? ' from ' + plural(m.hours, 'hour') + ', after tax'
+        : ' across ' + plural(m.jobs, 'job'));
       if (m.bills > 0.004) sub += ' · ' + money(m.bills) + ' of it went to bills';
     } else {
       cls += ' is-urgent';
@@ -2156,11 +2470,14 @@
       '<div class="hero-amount">' + amount + '</div>' +
       '<div class="hero-sub">' + sub + '</div>' +
       '<div class="hero-actions"><div class="btn-row">' +
-      '<button class="btn primary" data-act="add-job">＋ Job</button>' +
+      (isHourly()
+        ? '<button class="btn primary" data-act="add-hours">＋ Hours</button>'
+        : '<button class="btn primary" data-act="add-job">＋ Job</button>') +
       '<button class="btn subtle" data-act="add-expense">＋ Expense</button>' +
       '</div>' +
       // A job you have done before is one tap, right where you would log a new one.
       (function () {
+        if (isHourly()) return '';
         var again = recentJobs(3);
         if (!again.length) return '';
         return '<div class="hero-again">' + again.map(function (r, i) {
@@ -2295,6 +2612,49 @@
         '<button class="btn sm" data-act="pay-partner">Record a payment</button>' +
         '<button class="btn sm ghost" data-act="go-business">See the history</button>' +
         '</div></div>';
+    }
+
+    /* ---- the paycheck, when that is how the money arrives ---- */
+    if (isHourly()) {
+      var o = inc();
+      if (!(o.rate > 0)) {
+        html += '<div class="banner warn"><span>⏱</span><div><strong>Add your hourly pay</strong>' +
+          'Hours are being logged, but with no rate they are worth nothing yet. ' +
+          '<button class="btn sm mt" data-act="pay-setup">Set it up</button></div></div>';
+      } else {
+        var pp = thisPay();
+        var nx = nextPayday();
+        var todayH = hoursOn(t);
+        html += '<div class="card"><div class="card-title">Your pay' + why('paycheck') +
+          '<span class="faint" style="text-transform:none;letter-spacing:0">' +
+          (isCalibrated() ? 'from your payslip' : 'estimated') + '</span></div>' +
+          '<div style="display:flex;align-items:baseline;justify-content:space-between;gap:10px;margin-bottom:4px">' +
+          '<div class="money" id="pay-net" style="font-size:1.6rem;font-weight:800;letter-spacing:-0.6px">' +
+          money(nx.net) + '</div>' +
+          '<div class="small dim">landing ' + fmtDate(nx.pay) + ' · ' + relDay(nx.pay) + '</div></div>' +
+          '<div class="hint mb">' + plural(nx.hours, 'hour') + ' · ' + money(nx.gross) +
+          ' before tax · you keep about ' + Math.round(100 * nx.keep) + '%</div>';
+
+        if (nx.end !== pp.end) {
+          html += '<div class="list-row"><div><div class="small">The one you are working now</div>' +
+            '<div class="lr-sub">' + fmtDate(pp.start) + ' – ' + fmtDate(pp.end) + ' · ' +
+            plural(pp.hours, 'hour') + ' so far · pays ' + fmtDate(pp.pay) + '</div></div>' +
+            '<div class="lr-amt">' + money(pp.net) + '</div></div>';
+        }
+        html += '<div class="list-row" style="border-bottom:none"><div><div class="small">' +
+          (todayH ? plural(todayH, 'hour') + ' logged today' : 'Nothing logged today') + '</div>' +
+          '<div class="lr-sub">' + (todayH
+            ? money(grossOn(t)) + ' before tax · about ' + money(netOn(t)) + ' after'
+            : 'tap ＋ Hours when you have worked') + '</div></div>' +
+          (todayH ? '<button class="btn sm ghost" data-act="add-hours">Add more</button>' : '') +
+          '</div>';
+        if (!isCalibrated()) {
+          html += '<div class="hint mt">This is an estimate from the 2026 tax tables. ' +
+            '<button class="btn sm ghost" data-act="pay-setup">Put in a real payslip</button> ' +
+            'and it uses your own withholding instead.</div>';
+        }
+        html += '</div>';
+      }
     }
 
     /* ---- bills the app is waiting on you to confirm ---- */
@@ -2549,8 +2909,12 @@
       '<p>Log what a job pays and what the day costs. Add your bills and it works out what to ' +
       'put aside each day so every one is covered <strong>' + cushionWords() + ' before</strong> ' +
       'it\'s due — then tells you what is genuinely yours to keep.</p>' +
-      '<button class="btn primary" data-act="add-job">＋ Log a job</button>' +
+      (isHourly()
+        ? '<button class="btn primary" data-act="add-hours">＋ Log hours</button>'
+        : '<button class="btn primary" data-act="add-job">＋ Log a job</button>') +
       '<button class="btn mt" data-act="add-bill">＋ Add a bill</button>' +
+      '<button class="btn mt" data-act="pay-setup">' +
+      (isHourly() ? '⏱ How you get paid' : '⏱ I get paid by the hour') + '</button>' +
       '<button class="btn mt" data-act="import">📋 Paste a setup code</button>' +
       '</div>' +
       '<div class="sep"></div>' +
@@ -3264,6 +3628,17 @@
       'keep it in Notes. Pasting it into any copy of the app rebuilds your bills and splits.</p>' +
       '<button class="btn primary" data-act="my-code">⧉ Copy my setup code</button></div>';
 
+    html += '<div class="card"><div class="card-title">How you get paid</div>' +
+      '<p class="small dim mb">' + (isHourly()
+        ? 'By the hour' + (inc().rate > 0 ? ' at ' + money(inc().rate) : '') +
+          (inc().state ? ' in ' + esc(stateName(inc().state)) : '') +
+          ', paid ' + periodWords(inc().period) + '.' +
+          (isCalibrated() ? ' Using a real payslip for the tax.' : ' Tax estimated from the tables.')
+        : 'Per job — you log what each one pays and set your own tax aside.') + '</p>' +
+      '<button class="btn" data-act="pay-setup">' +
+      (isHourly() ? 'Change how you get paid' : 'I get paid by the hour instead') +
+      '</button></div>';
+
     html += '<div class="card"><div class="card-title">Backup</div>' +
       '<p class="small dim mb">Everything is stored on this device only. Clearing Safari data wipes it — ' +
       'save a backup file somewhere safe now and then.' +
@@ -3818,6 +4193,242 @@
   }
 
   /* ---- Logging work and costs -------------------------------------------- */
+
+  /**
+   * Logging hours. The same shape as logging a job — one number is enough,
+   * and everything else folds away.
+   */
+  function shiftSheet(shift, dateISO) {
+    var isNew = !shift;
+    var d = shift || { hours: '', date: dateISO || todayISO(), note: '' };
+    var o = inc();
+
+    var html = '<h2>' + (isNew ? 'Log hours' : 'Edit hours') + '</h2>' +
+      '<div class="sheet-sub">' + (o.rate > 0
+        ? 'At ' + money(o.rate) + ' an hour.'
+        : 'Set your hourly pay under More first, or these hours are worth nothing.') + '</div>' +
+      '<div class="field"><label>Hours worked</label>' +
+      '<input id="h-hrs" type="text" inputmode="decimal" value="' + (d.hours === '' ? '' : d.hours) +
+      '" placeholder="0"></div>' +
+      '<div class="chip-row mb" id="h-quick">' +
+      [4, 6, 8, 10, 12].map(function (n) {
+        return '<button type="button" class="chip" data-set="' + n + '">' + n + ' hrs</button>';
+      }).join('') + '</div>' +
+      '<div class="hint mb" id="h-worth"></div>' +
+      '<button class="btn primary" id="h-save" style="margin-bottom:10px">' +
+      (isNew ? 'Log it' : 'Save changes') + '</button>' +
+      '<details class="more-fields"' + (!isNew && (d.note || d.date !== todayISO()) ? ' open' : '') + '>' +
+      '<summary>Add details — date, note</summary>' +
+      '<div class="field-row">' +
+      '<div class="field"><label>Date</label><input id="h-date" type="date" value="' + esc(d.date) + '"></div>' +
+      '<div class="field"><label>Note (optional)</label>' +
+      '<input id="h-note" type="text" value="' + esc(d.note || '') + '" placeholder="e.g. covered a shift"></div>' +
+      '</div></details>';
+    if (!isNew) html += '<button class="btn danger" id="h-del" style="margin-bottom:8px">Delete these hours</button>';
+    html += '<button class="btn ghost" data-act="close-sheet">Cancel</button>';
+
+    openSheet(html, function (sheet) {
+      var input = $('#h-hrs', sheet);
+      var worth = $('#h-worth', sheet);
+      var dateEl = $('#h-date', sheet);
+
+      // Say what the hours are worth as they are typed, gross and after the
+      // employer's cut, because those are very different numbers.
+      var preview = function () {
+        var n = parseFloat(input.value);
+        if (!(n > 0) || !(o.rate > 0)) { worth.textContent = ''; return; }
+        var iso = dateEl ? dateEl.value : d.date;
+        var before = hoursOn(iso) - (isNew ? 0 : (+d.hours || 0));
+        var wk = hoursInWeek(iso) - (isNew ? 0 : (+d.hours || 0));
+        var cap = Math.max(0, (+o.otAfter || 40) - (wk - before));
+        var plain = Math.min(n, Math.max(0, cap - before));
+        var over = Math.max(0, n - plain);
+        var gross = round2(plain * o.rate + over * o.rate * (+o.otMult || 1.5));
+        worth.innerHTML = money(gross) + ' before tax' +
+          (over > 0.004 ? ' · ' + over + ' of them at overtime' : '') +
+          ' · about <strong>' + money(round2(gross * keepRate())) + '</strong> after';
+      };
+      input.addEventListener('input', preview);
+      if (dateEl) dateEl.addEventListener('change', preview);
+      $$('#h-quick .chip', sheet).forEach(function (c) {
+        c.addEventListener('click', function () { input.value = c.dataset.set; preview(); });
+      });
+      preview();
+
+      $('#h-save', sheet).addEventListener('click', function () {
+        var n = parseFloat(input.value);
+        if (!(n > 0)) { input.focus(); return; }
+        if (n > 24) n = 24;
+        var iso = dateEl ? dateEl.value : d.date;
+        var note = $('#h-note', sheet) ? $('#h-note', sheet).value.trim() : '';
+        if (isNew) {
+          state.shifts.push({ id: uid(), date: iso, hours: round2(n), note: note, ts: Date.now() });
+        } else {
+          shift.hours = round2(n); shift.date = iso; shift.note = note;
+        }
+        save(); closeSheet(); render();
+        toast('✅ ' + plural(round2(n), 'hour') + ' logged');
+      });
+
+      var del = $('#h-del', sheet);
+      if (del) del.addEventListener('click', function () {
+        state.shifts = state.shifts.filter(function (x) { return x.id !== shift.id; });
+        save(); closeSheet(); render();
+        toast('Hours removed');
+      });
+      setTimeout(function () { input.focus(); input.select(); }, 220);
+    });
+  }
+
+  /**
+   * Setting up a wage. The tables get you close; one real payslip gets you
+   * exact, so the calibration sits right here rather than buried.
+   */
+  function paySheet() {
+    var o = inc();
+    var year = expectedYear();
+    var t = year > 0 ? yearTax(year, o) : null;
+
+    var html = '<h2>How you get paid</h2>' +
+      '<div class="sheet-sub">Switch between working for yourself and working for a wage. ' +
+      'Nothing you have logged is deleted either way.</div>' +
+      '<div class="field"><label>Paid how?</label><div class="chip-row" id="p-mode">' +
+      [['jobs', '💵 Per job'], ['hourly', '⏱ By the hour']].map(function (x) {
+        return '<button type="button" class="chip' + (o.mode === x[0] ? ' on' : '') +
+          '" data-m="' + x[0] + '">' + x[1] + '</button>';
+      }).join('') + '</div></div>' +
+      '<div id="p-wage"' + (o.mode === 'hourly' ? '' : ' style="display:none"') + '>' +
+      '<div class="field-row">' +
+      '<div class="field"><label>Pay an hour</label>' +
+      '<input id="p-rate" type="text" inputmode="decimal" value="' + (o.rate || '') + '" placeholder="0.00"></div>' +
+      '<div class="field"><label>Overtime after</label>' +
+      '<input id="p-ot" type="text" inputmode="decimal" value="' + (o.otAfter || 40) + '" placeholder="40"></div>' +
+      '</div>' +
+      '<div class="field"><label>State</label><select id="p-state">' +
+      '<option value="">Choose your state…</option>' +
+      STATES.map(function (x) {
+        return '<option value="' + x[0] + '"' + (o.state === x[0] ? ' selected' : '') + '>' +
+          esc(x[1]) + (x[2] === 0 ? ' — no income tax' : '') + '</option>';
+      }).join('') + '</select></div>' +
+      '<div class="field"><label>Tax filing</label><div class="chip-row" id="p-filing">' +
+      [['single', 'Single'], ['married', 'Married, jointly'], ['head', 'Head of household']].map(function (x) {
+        return '<button type="button" class="chip' + (o.filing === x[0] ? ' on' : '') +
+          '" data-f="' + x[0] + '">' + x[1] + '</button>';
+      }).join('') + '</div></div>' +
+      '<div class="field"><label>Paid how often?</label><div class="chip-row" id="p-period">' +
+      [['weekly', 'Weekly'], ['biweekly', 'Every 2 weeks'],
+       ['semimonthly', 'Twice a month'], ['monthly', 'Monthly']].map(function (x) {
+        return '<button type="button" class="chip' + (o.period === x[0] ? ' on' : '') +
+          '" data-p="' + x[0] + '">' + x[1] + '</button>';
+      }).join('') + '</div></div>' +
+      '<div class="field-row">' +
+      '<div class="field"><label>A recent payday</label>' +
+      '<input id="p-payday" type="date" value="' + esc(o.payday || '') + '"></div>' +
+      '<div class="field"><label>Expected for the year</label>' +
+      '<input id="p-annual" type="text" inputmode="decimal" value="' + (o.annual || '') +
+      '" placeholder="worked out for you"></div>' +
+      '</div>' +
+      '<p class="small dim mb">Leave the year blank and it is worked out from the hours you ' +
+      'log. Filling it in makes the tax estimate steadier while there is not much logged yet.</p>' +
+      (t
+        ? '<div class="card tight mb"><div class="card-title">On ' + money(year) + ' a year</div>' +
+          '<div class="list-row"><div class="lr-sub">Federal tax</div><div class="lr-amt">' + money(t.fed) + '</div></div>' +
+          '<div class="list-row"><div class="lr-sub">Social Security &amp; Medicare</div>' +
+          '<div class="lr-amt">' + money(round2(t.ss + t.med)) + '</div></div>' +
+          '<div class="list-row"><div class="lr-sub">' +
+          (o.state ? esc(stateName(o.state)) + ' tax' : 'State tax — pick a state') + '</div>' +
+          '<div class="lr-amt">' + money(t.state) + '</div></div>' +
+          '<div class="list-row"><div><strong>You keep</strong></div><div class="lr-amt">' +
+          money(t.net) + ' <span class="lr-sub">' + Math.round(100 * t.net / year) + '%</span></div></div>' +
+          '</div>'
+        : '') +
+      '<details class="more-fields"><summary>Taken out of every paycheck</summary>' +
+      '<div class="field-row">' +
+      '<div class="field"><label>Before tax (401k, health)</label>' +
+      '<input id="p-pre" type="text" inputmode="decimal" value="' + (o.preTax || '') + '" placeholder="0.00"></div>' +
+      '<div class="field"><label>After tax</label>' +
+      '<input id="p-post" type="text" inputmode="decimal" value="' + (o.postTax || '') + '" placeholder="0.00"></div>' +
+      '</div>' +
+      '<div class="field"><label>Days between the end of a work period and payday</label>' +
+      '<input id="p-lag" type="text" inputmode="numeric" value="' + (o.lag == null ? 5 : o.lag) + '"></div>' +
+      '</details>' +
+      '<div class="card tight mt"><div class="card-title">Make it exact</div>' +
+      '<p class="small">The rates above are the published 2026 ones and an estimate for your ' +
+      'state. They cannot know your W-4, your health plan or a city tax. ' +
+      '<strong>Put in one real payslip and the app uses your own numbers instead.</strong></p>' +
+      '<div class="field-row">' +
+      '<div class="field"><label>Payslip: gross</label>' +
+      '<input id="p-cg" type="text" inputmode="decimal" value="' +
+      ((o.calib && o.calib.gross) || '') + '" placeholder="0.00"></div>' +
+      '<div class="field"><label>…and what landed</label>' +
+      '<input id="p-cn" type="text" inputmode="decimal" value="' +
+      ((o.calib && o.calib.net) || '') + '" placeholder="0.00"></div>' +
+      '</div>' +
+      '<div class="hint" id="p-cal">' + (isCalibrated()
+        ? 'Using your payslip: you keep <strong>' + Math.round(100 * keepRate()) + '%</strong>' +
+          (o.calib.on ? ' — from ' + fmtDate(o.calib.on) : '') + '.'
+        : 'Not set — using the tables.') + '</div>' +
+      (isCalibrated() ? '<button class="btn sm ghost mt" id="p-clear">Go back to the tables</button>' : '') +
+      '</div>' +
+      '</div>' +
+      '<button class="btn primary mt" id="p-save">Save</button>' +
+      '<button class="btn ghost" data-act="close-sheet">Cancel</button>';
+
+    openSheet(html, function (sheet) {
+      var mode = o.mode, filing = o.filing, period = o.period;
+      var wage = $('#p-wage', sheet);
+      $$('#p-mode .chip', sheet).forEach(function (c) {
+        c.addEventListener('click', function () {
+          mode = c.dataset.m;
+          $$('#p-mode .chip', sheet).forEach(function (x) { x.classList.toggle('on', x === c); });
+          wage.style.display = mode === 'hourly' ? '' : 'none';
+        });
+      });
+      $$('#p-filing .chip', sheet).forEach(function (c) {
+        c.addEventListener('click', function () {
+          filing = c.dataset.f;
+          $$('#p-filing .chip', sheet).forEach(function (x) { x.classList.toggle('on', x === c); });
+        });
+      });
+      $$('#p-period .chip', sheet).forEach(function (c) {
+        c.addEventListener('click', function () {
+          period = c.dataset.p;
+          $$('#p-period .chip', sheet).forEach(function (x) { x.classList.toggle('on', x === c); });
+        });
+      });
+      var clear = $('#p-clear', sheet);
+      if (clear) clear.addEventListener('click', function () {
+        $('#p-cg', sheet).value = ''; $('#p-cn', sheet).value = '';
+        $('#p-cal', sheet).textContent = 'Cleared on save — back to the tables.';
+      });
+
+      $('#p-save', sheet).addEventListener('click', function () {
+        var num = function (id, dflt) {
+          var v = parseFloat(($(id, sheet) || {}).value);
+          return isFinite(v) ? v : dflt;
+        };
+        var cg = num('#p-cg', 0), cn = num('#p-cn', -1);
+        var o2 = state.settings.income;
+        o2.mode = mode;
+        o2.rate = Math.max(0, num('#p-rate', 0));
+        o2.otAfter = clamp(num('#p-ot', 40), 0, 168);
+        o2.state = ($('#p-state', sheet) || {}).value || '';
+        o2.filing = filing;
+        o2.period = period;
+        o2.payday = ($('#p-payday', sheet) || {}).value || null;
+        var yr = num('#p-annual', 0);
+        o2.annual = yr > 0 ? yr : null;
+        o2.preTax = Math.max(0, num('#p-pre', 0));
+        o2.postTax = Math.max(0, num('#p-post', 0));
+        o2.lag = clamp(num('#p-lag', 5), 0, 30);
+        o2.calib = (cg > 0 && cn >= 0) ? { gross: round2(cg), net: round2(cn), on: todayISO() } : null;
+        save(); closeSheet(); render();
+        toast(mode === 'hourly'
+          ? (o2.rate > 0 ? '✅ Set up — ' + money(o2.rate) + ' an hour' : '✅ Saved — add your hourly pay next')
+          : '✅ Back to logging jobs');
+      });
+    });
+  }
 
   function jobSheet(job, dateISO) {
     var isNew = !job;
@@ -4800,6 +5411,21 @@
       'Advanced, which puts every running total, breakdown and chart back. Nothing is ever ' +
       'taken away, only folded.</p></div>';
 
+    if (isHourly()) {
+      html += '<div class="card tight"><div class="card-title">Paid by the hour</div>' +
+        '<p class="small">Tap <strong>＋ Hours</strong> and type how many. That is it. ' +
+        'The app prices them at your rate, puts anything past ' +
+        plural(inc().otAfter || 40, 'hour') + ' in a week at overtime, and works out what ' +
+        'should actually land on payday.</p>' +
+        '<p class="small mt">Your bills are paid out of <strong>after-tax</strong> money, so ' +
+        'that is what the daily figure counts. The big green number is what a day of work ' +
+        'really left you, not what it says on the timesheet.</p>' +
+        '<p class="small dim mt">The tax is estimated from the 2026 federal tables and a rate ' +
+        'for your state. It cannot know your W-4 or your health plan. ' +
+        '<strong>More → How you get paid</strong> takes one real payslip — gross and what ' +
+        'landed — and uses your own withholding from then on. That is the accurate one.</p></div>';
+    }
+
     html += '<div class="card tight"><div class="card-title">Logging is two taps</div>' +
       '<p class="small">Tap <strong>＋ Job</strong>, type what it paid, tap <strong>Log it</strong>. ' +
       'That is the whole thing. Service, who paid, the customer and the date all sit under ' +
@@ -5226,6 +5852,13 @@
       case 'goto-bills': view = 'bills'; render(); window.scrollTo({ top: 0 }); break;
 
       case 'add-job': jobSheet(null, t.dataset.date || null); break;
+      case 'add-hours': shiftSheet(null, t.dataset.date || null); break;
+      case 'pay-setup': paySheet(); break;
+      case 'edit-shift': {
+        var sh = (state.shifts || []).filter(function (x) { return x.id === t.dataset.id; })[0];
+        if (sh) shiftSheet(sh, null);
+        break;
+      }
       case 'edit-job': {
         var jb = null;
         state.jobs.forEach(function (x) { if (x.id === id) jb = x; });

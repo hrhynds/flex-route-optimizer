@@ -233,6 +233,40 @@ The **Still to find** stat above the calendar is a different figure on purpose: 
 every bill you track, in any month, which is why it's larger. Tap its **?** and it lists
 each bill with what it still needs — and explains why paying a bill makes it go *up*.
 
+### Two ways to be paid
+
+**Per job** is the default: you log what each job brought in, gross, and set your own tax
+aside. **By the hour** is for a wage, and it answers a different question — you don't get
+money daily, you get a paycheck, and the employer has already taken its cut.
+
+Set it up under **More → How you get paid**: hourly rate, state, filing status, how often you
+are paid, and a recent payday to count the others from. Then `＋ Hours` replaces `＋ Job` and
+you type how many hours you worked.
+
+- **Overtime** is priced where the hour falls in the week, not where it falls in the day. The
+  ninth hour of a 48-hour week is overtime; the same hour in a 30-hour week is not.
+- **Pay periods** run weekly, fortnightly, twice-monthly or monthly, anchored on a real payday
+  so they line up with your actual calendar. `lag` is the gap between the end of a work period
+  and the day it pays, default 5 days.
+- **Bills are funded out of after-tax money**, because that is what reaches the bank. The
+  hero number is what a day of work actually left you.
+
+#### The tax estimate, and how to stop it being an estimate
+
+Withholding is computed from the 2026 federal brackets (Rev. Proc. 2025-32), the standard
+deduction for your filing status, Social Security at 6.2% to the $184,500 wage base, Medicare
+at 1.45% plus the 0.9% surcharge over $200,000, and a per-state rate. Pre-tax deductions come
+off before everything; post-tax after.
+
+The state rates are a single figure per state chosen for what a wage actually lands in, not
+the headline top rate, and they are labelled on screen as an estimate. They cannot know your
+W-4, your health plan or a city tax.
+
+So the app takes **one real payslip** — gross, and what landed — and uses that ratio from then
+on, ignoring the tables entirely. That is the accurate path, and the card says which one it is
+using. `test-taxmath.js` lifts the engine straight out of the shipped file and checks it
+against sums worked out by hand from the published tables.
+
 ### Backups
 
 Everything lives in `localStorage` on one device, so losing it is a real failure mode rather
