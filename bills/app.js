@@ -22,7 +22,7 @@
 
   var STORE_KEY = 'billcushion.v1';
   var BACKUP_KEY = 'billcushion.lastgood';   // the state as of the last clean open
-  var APP_VERSION = '2026.09.23a';            // bump when shipping; shown under More
+  var APP_VERSION = '2026.09.24a';            // bump when shipping; shown under More
   var MS_DAY = 86400000;
   var DOW_LONG = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
   var DOW_MID = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
@@ -3620,8 +3620,12 @@
       'so clearing Safari data erases it — and the app on your Home Screen keeps its own ' +
       'separate copy from Safari.</div>' +
       '<div class="list-row" style="border-top:1px solid var(--line);margin-top:6px">' +
-      '<div><div>App version</div><div class="lr-sub">Pull down to refresh if this looks old</div></div>' +
-      '<div class="lr-amt tiny faint">' + APP_VERSION + '</div></div></div>';
+      '<div><div>App version</div><div class="lr-sub">' + APP_VERSION + '</div></div>' +
+      '<button class="btn sm" data-act="force-update">Check for an update</button></div>' +
+      '<div class="hint">Safari can keep serving an old copy of the app for a while. This ' +
+      'throws that copy away and fetches the current one. <strong>It does not touch your ' +
+      'data</strong> — bills, hours and backups all stay exactly where they are.</div>' +
+      '</div>';
 
     html += '<div class="card"><div class="card-title">Your setup code</div>' +
       '<p class="small dim mb">The quickest way back if anything is ever lost: copy this and ' +
@@ -4945,6 +4949,43 @@
      9. Backup / restore
      ------------------------------------------------------------------------ */
 
+  /**
+   * Throw away every cached copy of the app and come back on the current one.
+   *
+   * A phone can sit on an old build for a long time: the files are served with
+   * a ten-minute cache header, but Safari — and a Home Screen app especially,
+   * where there is no address bar to pull on — will hold them far longer than
+   * that. Versioned file names fix it going forward; this is the button for a
+   * phone that is already stuck.
+   *
+   * Nothing here touches localStorage. Caches hold the app, not your data.
+   */
+  function forceUpdate() {
+    var jobs = [];
+    try {
+      if (window.caches && caches.keys) {
+        jobs.push(caches.keys().then(function (keys) {
+          return Promise.all(keys.filter(function (k) {
+            return k.indexOf('billcushion-') === 0;
+          }).map(function (k) { return caches.delete(k); }));
+        }));
+      }
+      if (navigator.serviceWorker && navigator.serviceWorker.getRegistrations) {
+        jobs.push(navigator.serviceWorker.getRegistrations().then(function (rs) {
+          return Promise.all(rs.map(function (r) { return r.unregister(); }));
+        }));
+      }
+    } catch (e) { /* no caches API, or blocked — the reload still helps */ }
+    toast('Fetching the current version…');
+    var go = function () {
+      // a one-off query so the page itself cannot come from the cache either
+      try { location.replace(location.pathname + '?u=' + Date.now()); }
+      catch (e) { location.reload(); }
+    };
+    if (!jobs.length) { setTimeout(go, 300); return; }
+    Promise.all(jobs).then(go, go);
+  }
+
   function markBackedUp() {
     state.settings.lastBackup = todayISO();
     state.settings.backupNagDay = null;
@@ -5942,6 +5983,8 @@
 
       case 'export': exportData(); break;
       case 'copy-backup': copyBackup(); break;
+
+      case 'force-update': forceUpdate(); break;
 
       case 'share-backup': shareBackup(); break;
 
