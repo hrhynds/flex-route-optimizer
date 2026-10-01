@@ -1,0 +1,15 @@
+{
+  "name": "Graceful Auto Detailing — Owner",
+  "short_name": "Graceful",
+  "description": "Private dashboard for Graceful Auto Detailing.",
+  "start_url": "/admin",
+  "scope": "/admin",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#000000",
+  "theme_color": "#000000",
+  "icons": [
+    { "src": "/shared/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" },
+    { "src": "/shared/apple-touch-icon.png", "sizes": "180x180", "type": "image/png", "purpose": "any maskable" }
+  ]
+}

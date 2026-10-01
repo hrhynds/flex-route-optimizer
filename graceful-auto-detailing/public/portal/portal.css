@@ -1,0 +1,172 @@
+/* ==========================================================================
+   The customer's page — calm, unhurried, nothing to sign up for
+   ========================================================================== */
+
+.boot-splash { display: grid; place-items: center; min-height: 70dvh; color: var(--text-faint); }
+
+/* Kept deliberately compact: the extras have to clear the fold on the
+   smallest phone anyone still carries, without the page opening on a sales
+   pitch before it has said hello. */
+.portal-top {
+  padding: calc(var(--safe-top) + 16px) 0 2px;
+  text-align: center;
+}
+.portal-top .biz-mark {
+  width: min(94px, 26vw); height: auto; margin: 0 auto 2px;
+  display: block; object-fit: contain;
+}
+.portal-top .biz-tagline {
+  font-family: var(--font-head);
+  font-size: 0.66rem; font-weight: 700; color: var(--blue-light);
+  text-transform: uppercase; letter-spacing: 0.22em;
+}
+.portal-top .greeting {
+  font-size: 1.9rem; margin-top: 9px;
+}
+.portal-top .when {
+  color: var(--text-dim); font-size: 0.84rem; margin-top: 5px; font-weight: 600;
+}
+.portal-top .status-line { margin-top: 10px; }
+
+/* ---- arrival ---- */
+
+.arrival {
+  position: relative;
+  margin-top: 16px; padding: 18px;
+  border-radius: var(--radius);
+  background: linear-gradient(140deg, rgba(43,138,245,0.14) 0%, var(--surface) 80%);
+  border: 1px solid rgba(90, 174, 255, 0.5);
+  box-shadow: 0 0 30px rgba(43, 138, 245, 0.14);
+}
+.arrival::before {
+  content: '';
+  position: absolute; left: 0; right: 0; top: 0; height: 2px;
+  background: linear-gradient(90deg, transparent, var(--blue-bright), transparent);
+}
+.arrival .arrival-top { display: flex; align-items: center; gap: 9px; }
+.arrival .arrival-title {
+  font-family: var(--font-head); font-weight: 900; font-style: italic;
+  text-transform: uppercase; letter-spacing: 0.05em;
+  font-size: 1.1rem; flex: 1; color: var(--chrome);
+}
+.arrival .arrival-eta {
+  font-family: var(--font-head); font-weight: 900; font-style: italic;
+  font-size: 3.1rem; line-height: 1; letter-spacing: 0.01em; margin-top: 12px; color: var(--chrome);
+}
+.arrival .arrival-eta .unit {
+  font-size: 0.92rem; font-weight: 700; font-style: normal; color: var(--blue-light);
+  margin-left: 9px; text-transform: uppercase; letter-spacing: 0.12em;
+}
+.arrival .arrival-sub { color: var(--text-dim); font-size: 0.82rem; margin-top: 6px; font-weight: 600; }
+
+/* ---- what you are getting ---- */
+
+.line-item {
+  display: flex; align-items: flex-start; gap: 14px;
+  padding: 14px 0; border-bottom: 1px solid var(--line-soft);
+}
+.line-item:last-child { border-bottom: none; }
+.line-item .line-main { flex: 1; min-width: 0; }
+.line-item .line-name {
+  font-family: var(--font-head); font-weight: 700; font-size: 1.14rem;
+  text-transform: uppercase; letter-spacing: 0.035em; color: var(--chrome);
+}
+.line-item .line-desc { font-size: 0.83rem; color: var(--text-dim); margin-top: 4px; line-height: 1.5; }
+.line-item .line-price {
+  font-family: var(--font-head); font-weight: 900; font-style: italic; font-size: 1.3rem;
+  font-variant-numeric: tabular-nums; flex: none; color: var(--chrome);
+}
+.line-item .line-from { font-size: 0.7rem; color: var(--text-faint); font-weight: 600; display: block; text-align: right; }
+.line-item .line-yours {
+  display: inline-block; margin-top: 7px; font-size: 0.66rem;
+  color: var(--blue-light); font-weight: 700;
+  text-transform: uppercase; letter-spacing: 0.1em;
+}
+
+/* ---- optional extras ---- */
+
+.offer {
+  display: flex; align-items: flex-start; gap: 14px; width: 100%; text-align: left;
+  padding: 15px 16px; margin-top: 10px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--line);
+  background: linear-gradient(160deg, rgba(255,255,255,0.02), rgba(43,138,245,0.035)), var(--panel-2);
+  transition: border-color 0.15s ease, transform 0.08s ease, box-shadow 0.15s ease;
+}
+.offer:active { transform: scale(0.99); }
+.offer:hover {
+  border-color: rgba(43, 138, 245, 0.55);
+  box-shadow: 0 0 22px rgba(43, 138, 245, 0.1);
+}
+.offer .offer-main { flex: 1; min-width: 0; }
+.offer .offer-name {
+  font-family: var(--font-head); font-weight: 700; font-size: 1.14rem;
+  text-transform: uppercase; letter-spacing: 0.035em; color: var(--chrome);
+}
+.offer .offer-desc { font-size: 0.83rem; color: var(--text-dim); margin-top: 5px; line-height: 1.55; }
+.offer .offer-end { flex: none; text-align: right; }
+.offer .offer-price {
+  font-family: var(--font-head); font-weight: 900; font-style: italic; font-size: 1.35rem;
+  font-variant-numeric: tabular-nums; color: var(--chrome);
+}
+.offer .offer-from { display: block; font-size: 0.68rem; color: var(--text-faint); font-weight: 650; }
+.offer .offer-add {
+  display: inline-block; margin-top: 9px; padding: 5px 12px;
+  border-radius: var(--radius-xs);
+  background: var(--accent-soft); color: var(--blue-light);
+  border: 1px solid rgba(43, 138, 245, 0.3);
+  font-family: var(--font-head); font-size: 0.86rem; font-weight: 700;
+  text-transform: uppercase; letter-spacing: 0.09em;
+}
+
+.no-pressure {
+  text-align: center; font-size: 0.8rem; color: var(--text-faint);
+  margin-top: 16px; line-height: 1.6; font-weight: 500;
+}
+
+/* ---- total bar ---- */
+
+.total-bar {
+  position: sticky; bottom: 0; z-index: 20;
+  margin: 18px -16px 0;
+  border-top: 2px solid var(--blue);
+  padding: 14px 16px calc(14px + var(--safe-bottom));
+  background: color-mix(in srgb, var(--ink) 92%, transparent);
+  backdrop-filter: saturate(170%) blur(16px);
+  -webkit-backdrop-filter: saturate(170%) blur(16px);
+  border-top: 1px solid var(--line);
+  display: flex; align-items: center; justify-content: space-between; gap: 14px;
+}
+.total-bar .total-label {
+  font-size: 0.64rem; color: var(--blue-light); font-weight: 700;
+  text-transform: uppercase; letter-spacing: 0.16em;
+}
+.total-bar .total-value {
+  font-family: var(--font-head); font-size: 2rem; font-weight: 900; font-style: italic;
+  letter-spacing: 0.01em; font-variant-numeric: tabular-nums; color: var(--chrome);
+  transition: color 0.25s ease, text-shadow 0.25s ease;
+}
+.total-bar .total-value.bump { color: var(--blue-light); text-shadow: 0 0 18px rgba(43,138,245,0.5); }
+.total-bar .total-note { font-size: 0.72rem; color: var(--text-faint); }
+
+/* ---- photos ---- */
+
+.before-after { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 12px; }
+.ba-col .ba-label {
+  font-family: var(--font-head);
+  font-size: 0.82rem; font-weight: 700; letter-spacing: 0.2em; text-transform: uppercase;
+  color: var(--blue-light); margin-bottom: 8px; text-align: center;
+}
+.ba-col img { border-radius: var(--radius-sm); aspect-ratio: 1; object-fit: cover; width: 100%; }
+.ba-col img + img { margin-top: 8px; }
+
+/* ---- stars ---- */
+
+
+
+/* ---- expired ---- */
+
+.gone { text-align: center; padding: 16dvh 20px; }
+.gone .gone-icon { display: flex; justify-content: center; margin-bottom: 18px; color: var(--blue); }
+.gone h1 { font-size: 1.7rem; letter-spacing: 0.02em; }
+.gone p { color: var(--text-dim); font-size: 0.92rem; margin-top: 10px; line-height: 1.6; }

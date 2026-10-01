@@ -1,0 +1,11 @@
+# Caddy fetches and renews the certificate itself; there is nothing to do but
+# point a domain here. The app sets its own security headers, so this only
+# forwards and tells it the request arrived over https.
+{$APP_DOMAIN} {
+	encode gzip zstd
+
+	reverse_proxy app:8080 {
+		header_up X-Forwarded-Proto {scheme}
+		header_up X-Forwarded-For {remote_host}
+	}
+}

@@ -1,0 +1,185 @@
+# Deploys Graceful Auto Detailing to Fly.io from a button in the browser.
+#
+# This exists so the app can be set up and updated without a terminal: GitHub
+# runs the Fly command line for you. Everything you need to do happens on a
+# web page, which works on a phone.
+#
+# One-time setup, all in a browser:
+#   1. Make a Fly account at fly.io
+#   2. Make a token at fly.io/user/personal_access_tokens
+#   3. Put it in this repo under Settings -> Secrets and variables -> Actions,
+#      as a secret named FLY_API_TOKEN
+#   4. Come to the Actions tab, pick this workflow, press "Run workflow"
+
+name: Deploy
+
+on:
+  workflow_dispatch:
+    inputs:
+      app_name:
+        description: "Name for the app. Becomes https://NAME.fly.dev"
+        required: true
+        default: graceful-auto-detailing
+      region:
+        description: "Where it runs. ord = Chicago, the closest to Michigan."
+        required: true
+        default: ord
+
+concurrency:
+  group: fly-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Deploy to Fly
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: graceful-auto-detailing
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check the Fly token is set
+        run: |
+          if [ -z "${FLY_API_TOKEN}" ]; then
+            echo "::error::No FLY_API_TOKEN found. Add one under Settings -> Secrets and variables -> Actions. Make the token at https://fly.io/user/personal_access_tokens"
+            exit 1
+          fi
+          echo "Token found."
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+
+      - uses: superfly/flyctl-actions/setup-flyctl@master
+
+      - name: Run the tests first
+        run: |
+          node --version
+          npm test
+
+      - name: Work out the name and address
+        id: names
+        # The input arrives through the environment rather than being pasted
+        # into the script, so nothing typed in the box can run as a command.
+        env:
+          RAW_NAME: ${{ inputs.app_name }}
+        run: |
+          NAME=$(printf '%s' "$RAW_NAME" \
+            | tr '[:upper:]' '[:lower:]' | tr ' _' '--' | tr -cd 'a-z0-9-' \
+            | sed -e 's/--*/-/g' -e 's/^-//' -e 's/-$//')
+          if [ -z "$NAME" ]; then echo "::error::That app name has no usable characters."; exit 1; fi
+          echo "name=$NAME" >> "$GITHUB_OUTPUT"
+          echo "url=https://$NAME.fly.dev" >> "$GITHUB_OUTPUT"
+          echo "Deploying as $NAME -> https://$NAME.fly.dev"
+
+      - name: Create the app if it does not exist
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          NAME: ${{ steps.names.outputs.name }}
+        run: |
+          if flyctl status --app "$NAME" >/dev/null 2>&1; then
+            echo "App '$NAME' already exists."
+          else
+            echo "Creating '$NAME'..."
+            flyctl apps create "$NAME" \
+              || { echo "::error::Could not create '$NAME' — the name is probably taken. Run this again with a different name."; exit 1; }
+          fi
+
+      - name: Point the app at its own address
+        env:
+          NAME: ${{ steps.names.outputs.name }}
+          URL: ${{ steps.names.outputs.url }}
+        run: |
+          # Every link texted to a customer is built from PUBLIC_BASE_URL, so it
+          # is written from the app name rather than left to be edited by hand.
+          sed -i -e "s|^app = .*|app = \"$NAME\"|" \
+                 -e "s|^  PUBLIC_BASE_URL = .*|  PUBLIC_BASE_URL = \"$URL\"|" fly.toml
+          grep -E '^app = |PUBLIC_BASE_URL' fly.toml
+
+      - name: Create the disk if it does not exist
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          NAME: ${{ steps.names.outputs.name }}
+          REGION: ${{ inputs.region }}
+        run: |
+          if flyctl volumes list --app "$NAME" 2>/dev/null | grep -q graceful_data; then
+            echo "Disk already exists."
+          else
+            echo "Creating a 1 GB disk in $REGION..."
+            flyctl volumes create graceful_data --app "$NAME" --region "$REGION" --size 1 --yes
+          fi
+
+      - name: Set the sign-in secret if it is not set
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          NAME: ${{ steps.names.outputs.name }}
+        run: |
+          if flyctl secrets list --app "$NAME" 2>/dev/null | grep -q APP_SECRET; then
+            echo "Sign-in secret already set."
+          else
+            echo "Generating one..."
+            flyctl secrets set APP_SECRET="$(openssl rand -base64 48)" --app "$NAME" --stage
+            echo "Done. It is stored by Fly and never shown again."
+          fi
+
+      - name: Connect Twilio, if you have added those secrets
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          NAME: ${{ steps.names.outputs.name }}
+          SID: ${{ secrets.TWILIO_ACCOUNT_SID }}
+          TOKEN: ${{ secrets.TWILIO_AUTH_TOKEN }}
+          FROM: ${{ secrets.TWILIO_FROM }}
+        run: |
+          if [ -n "$SID" ] && [ -n "$TOKEN" ] && [ -n "$FROM" ]; then
+            flyctl secrets set TWILIO_ACCOUNT_SID="$SID" TWILIO_AUTH_TOKEN="$TOKEN" TWILIO_FROM="$FROM" --app "$NAME" --stage
+            echo "Twilio connected — texts will send themselves."
+          else
+            echo "No Twilio secrets set, so texts are prepared for you to send from your own phone."
+            echo "Add TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN and TWILIO_FROM here later and run this again to switch over."
+          fi
+
+      - name: Deploy
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          NAME: ${{ steps.names.outputs.name }}
+        run: flyctl deploy --app "$NAME" --remote-only
+
+      - name: Fetch the setup code
+        id: code
+        continue-on-error: true
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          NAME: ${{ steps.names.outputs.name }}
+        run: |
+          sleep 8
+          OUT=$(flyctl ssh console --app "$NAME" -C "npm run --silent setup-code" 2>/dev/null || true)
+          CODE=$(printf '%s' "$OUT" | grep -oE '[A-Z0-9_-]{12}' | head -1 || true)
+          echo "code=$CODE" >> "$GITHUB_OUTPUT"
+
+      - name: What to do next
+        env:
+          NAME: ${{ steps.names.outputs.name }}
+          URL: ${{ steps.names.outputs.url }}
+          CODE: ${{ steps.code.outputs.code }}
+        run: |
+          {
+            echo "## Your app is live"
+            echo ""
+            echo "**Open:** [$URL/admin]($URL/admin)"
+            echo ""
+            if [ -n "$CODE" ]; then
+              echo "**Setup code:** \`$CODE\`"
+              echo ""
+              echo "Enter that on the page above to create your account. It only works once."
+            else
+              echo "Could not read the setup code automatically. Run this workflow again, or see it with:"
+              echo ""
+              echo '```'
+              echo "flyctl ssh console --app $NAME -C \"npm run setup-code\""
+              echo '```'
+            fi
+            echo ""
+            echo "---"
+            echo ""
+            echo "Deploying again later: come back to this tab and press **Run workflow**."
+          } >> "$GITHUB_STEP_SUMMARY"
