@@ -22,7 +22,7 @@
 
   var STORE_KEY = 'billcushion.v1';
   var BACKUP_KEY = 'billcushion.lastgood';   // the state as of the last clean open
-  var APP_VERSION = '2026.09.10';            // bump when shipping; shown under More
+  var APP_VERSION = '2026.09.24a';            // bump when shipping; shown under More
   var MS_DAY = 86400000;
   var DOW_LONG = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
   var DOW_MID = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
@@ -167,9 +167,27 @@
         roundTo: 0.01,             // round the daily ask up to this step
         confirmMigrated: false,    // one-time move off the old automatic behaviour
         installDismissed: false,
-        lastBackup: null
+        lastBackup: null,
+        backupNagDay: null,
+        income: {
+          mode: 'jobs',          // 'jobs' = paid per job; 'hourly' = paid a wage
+          rate: 0,               // $ an hour
+          state: '',             // two-letter code, '' = not set
+          filing: 'single',      // single | married | head
+          annual: null,          // expected gross for the year; null = work it out
+          period: 'biweekly',    // weekly | biweekly | semimonthly | monthly
+          payday: null,          // a real payday, to count the others from
+          lag: 5,                // days between the end of the work period and payday
+          otAfter: 40,           // hours in a week before overtime
+          otMult: 1.5,
+          preTax: 0,             // taken out before tax each paycheck (401k, health)
+          postTax: 0,            // taken out after tax each paycheck
+          stateRate: null,       // override the table
+          calib: null            // { gross, net, on } from a real payslip — beats any table
+        }
       },
       bills: [],
+      shifts: [],                  // hours worked { id, date, hours, note, ts }
       contributions: [],
       days: {},                    // iso -> { completed, skipped, planned, at }
       overrides: { work: [], off: [] },
@@ -240,12 +258,16 @@
         jobs: Array.isArray(d.jobs) ? d.jobs : [],
         expenses: Array.isArray(d.expenses) ? d.expenses : [],
         payouts: Array.isArray(d.payouts) ? d.payouts : [],
+        shifts: Array.isArray(d.shifts) ? d.shifts : [],
         meta: Object.assign(base.meta, d.meta || {})
       };
       // a v1 backup has no partner block of its own
       state.settings.partner = Object.assign(
         { name: 'Logan', mode: 'none', value: 0 },
         (d.settings && d.settings.partner) || {}
+      );
+      state.settings.income = Object.assign(
+        base.settings.income, (d.settings && d.settings.income) || {}
       );
       state.bills.forEach(function (b) {
         if (b.cycle == null) b.cycle = 0;
@@ -285,14 +307,92 @@
     }
   }
 
+  /**
+   * A rolling set of dated copies, kept alongside the single last-clean-open
+   * one. Storage is cheap and the whole state is a few kilobytes, so there is
+   * no reason to hold only one: a bad write, a bad edit or a bad day all become
+   * recoverable, and each is labelled with the day it was taken.
+   *
+   * This cannot survive the browser throwing the whole origin away — nothing
+   * written here can. That is what the off-device backup is for.
+   */
+  var SNAP_PREFIX = 'billcushion.snap.';
+  var SNAP_KEEP = 6;
+  var SNAP_MAX = 600000;            // don't fill the quota with huge states
+  var lastSnap = 0;
+
+  function snapKeys() {
+    var keys = [];
+    try {
+      for (var i = 0; i < localStorage.length; i++) {
+        var k = localStorage.key(i);
+        if (k && k.indexOf(SNAP_PREFIX) === 0) keys.push(k);
+      }
+    } catch (e) { /* storage unavailable */ }
+    return keys.sort();             // ISO dates sort chronologically
+  }
+
+  function snapshot(force) {
+    // Nothing to protect, and never let an empty state push a real one out.
+    if (!state.bills.length && !state.jobs.length && !state.expenses.length) return;
+    var now = Date.now();
+    if (!force && now - lastSnap < 120000) return;
+    var payload;
+    try { payload = JSON.stringify(state); } catch (e) { return; }
+    if (payload.length > SNAP_MAX) return;
+    lastSnap = now;
+    try {
+      localStorage.setItem(SNAP_PREFIX + todayISO(), payload);
+    } catch (e) {
+      // out of room: drop the oldest and let the next save try again
+      var old = snapKeys();
+      if (old.length) { try { localStorage.removeItem(old[0]); } catch (e2) {} }
+      return;
+    }
+    var keys = snapKeys();
+    while (keys.length > SNAP_KEEP) {
+      try { localStorage.removeItem(keys.shift()); } catch (e3) { break; }
+    }
+  }
+
+  /**
+   * Every copy this device is holding, richest-looking first, so a restore can
+   * offer a real choice rather than a single take-it-or-leave-it.
+   */
+  function recoveryCopies() {
+    var out = [];
+    var add = function (key, raw, label, date) {
+      if (!raw) return;
+      try {
+        var d = JSON.parse(raw);
+        if (!d || !Array.isArray(d.bills)) return;
+        out.push({ key: key, raw: raw, data: d, label: label, date: date,
+                   bills: d.bills.length, jobs: (d.jobs || []).length });
+      } catch (e) { /* skip anything unreadable */ }
+    };
+    try { add(BACKUP_KEY, localStorage.getItem(BACKUP_KEY), 'Last clean open', null); } catch (e) {}
+    snapKeys().forEach(function (k) {
+      var iso = k.slice(SNAP_PREFIX.length);
+      try { add(k, localStorage.getItem(k), fmtDate(iso), iso); } catch (e) {}
+    });
+    out.sort(function (a, z) {
+      if (a.date && z.date) return diffDays(a.date, z.date);
+      return (z.bills + z.jobs) - (a.bills + a.jobs);
+    });
+    return out;
+  }
+
   /** Is there a usable fallback copy? */
   function lastGood() {
     try {
       var raw = localStorage.getItem(BACKUP_KEY);
-      if (!raw) return null;
-      var d = JSON.parse(raw);
-      return d && Array.isArray(d.bills) ? { raw: raw, data: d } : null;
-    } catch (e) { return null; }
+      if (raw) {
+        var d = JSON.parse(raw);
+        if (d && Array.isArray(d.bills)) return { raw: raw, data: d };
+      }
+    } catch (e) { /* fall through to the dated copies */ }
+    var all = recoveryCopies();
+    return all.length ? { raw: all[0].raw, data: all[0].data } : null;
   }
 
   var syncing = false;
@@ -317,6 +417,7 @@
     if (!saveWorks) {
       toast('⚠️ This browser is not saving — see More for how to fix it');
     }
+    snapshot();
   }
 
   /* ---------------------------------------------------------------------------
@@ -480,10 +581,41 @@
    *   actual    : what was actually set aside that day
    * Past/today use real contributions; future days assume the plan is followed.
    */
+  /**
+   * Move any row whose cycle is both paid for and past its due date on to the
+   * next round: the bill has been handed over, so it starts saving again.
+   *
+   * Without this the plan only ever funded the cycle running right now, and
+   * went quiet the moment that was covered — so a month whose bills had not
+   * come round yet looked free. October could say it cost $1,700 above a
+   * calendar asking for $25.
+   *
+   * A one-off never comes back, so advanceDue returns nothing and it stops.
+   */
+  function rollForward(rows, iso) {
+    for (var i = 0; i < rows.length; i++) {
+      var r = rows[i];
+      var guard = 0;
+      while (diffDays(r.due, iso) > 0 &&
+             round2(r.b.amount - r.saved) <= 0.004 &&
+             guard++ < 24) {
+        var nxt = advanceDue({ dueDate: r.due, recurrence: r.b.recurrence,
+                               anchorDay: r.b.anchorDay, scheduleDates: r.b.scheduleDates });
+        if (!nxt || nxt === r.due) break;
+        r.due = nxt;
+        r.target = cushionDateFor(nxt, cushionOf(r.b));
+        r.saved = 0;
+        r.ahead++;
+      }
+    }
+  }
+
   function simulate(startISO, endISO) {
     var bills = datedBills();
+    var today = todayISO();
     var rows = bills.map(function (b) {
-      return { b: b, target: targetDate(b), saved: savedFor(b, startISO) };
+      return { b: b, due: b.dueDate, target: targetDate(b),
+               saved: savedFor(b, startISO), ahead: 0 };
     });
     var out = {};
     var span = clamp(diffDays(startISO, endISO), 0, 800);
@@ -492,6 +624,12 @@
 
     for (var i = 0; i <= span; i++) {
       var funding = isFundingDay(iso);
+
+      // Only ever past today. Whether the bill sitting on today's due date has
+      // actually been handed over is something only you know, and money can
+      // only be filed against a cycle that really exists — so today's ask stays
+      // on the cycles in your data, and the projection runs ahead of it.
+      if (diffDays(today, iso) > 0) rollForward(rows, iso);
 
       // The day's ask is fixed at the start of the day...
       var planned = need(rows, iso, funding, step);
@@ -573,7 +711,8 @@
       items.push({
         billId: r.b.id, name: r.b.name, icon: r.b.icon,
         amount: round2(askToday), urgent: urgent,
-        remaining: remaining, fundingLeft: fundingLeft, target: r.target
+        remaining: remaining, fundingLeft: fundingLeft, target: r.target,
+        ahead: r.ahead || 0, due: r.due
       });
       total += askToday;
     }
@@ -635,6 +774,26 @@
     });
     out.sort(function (a, z) { return diffDays(z.date, a.date); });
     return out;
+  }
+
+  /**
+   * Bills whose date has come and gone without being marked paid.
+   *
+   * The plan now assumes a bill gets handed over on its due date and starts
+   * saving for the next round the day after. That assumption is only worth
+   * anything if the app tells you when it is waiting on you — otherwise it
+   * quietly projects a payment that never gets recorded, and goes on asking
+   * for a round you have not started.
+   */
+  function awaitingPayment() {
+    var t = todayISO();
+    return datedBills().filter(function (b) {
+      return diffDays(b.dueDate, t) >= 0;          // due today or already gone by
+    }).map(function (b) {
+      var saved = savedFor(b);
+      return { bill: b, saved: saved, short: round2(Math.max(0, b.amount - saved)),
+               late: diffDays(b.dueDate, t) };
+    }).sort(function (a, z) { return z.late - a.late; });
   }
 
   /** Today's snapshot, used all over the UI. */
@@ -740,6 +899,9 @@
     // pass 1 — cover what today asks for
     day.remaining.forEach(function (it) {
       if (left <= 0.004) return;
+      // A projected round has no cycle to file against yet. simulate() already
+      // keeps those off today, so this is a belt on top of braces.
+      if (it.ahead) return;
       var g = Math.min(it.amount, left);
       give(it.billId, g);
       left = round2(left - g);
@@ -751,7 +913,10 @@
         if (left <= 0.004) return;
         var already = 0;
         alloc.forEach(function (a) { if (a.billId === s.bill.id) already = a.amount; });
-        var room = round2(s.remaining - sumOn(s.bill, iso) - already);
+        // s.remaining is already net of everything banked today, so taking
+        // today's entries off again double-counts them — and once a correction
+        // can be negative, double-counting it *adds* room that is not there.
+        var room = round2(s.remaining - already);
         if (room <= 0.004) return;
         var g = Math.min(room, left);
         give(s.bill.id, g);
@@ -814,7 +979,13 @@
   function sum(list, key) {
     return round2(list.reduce(function (a, x) { return a + (+x[key || 'amount'] || 0); }, 0));
   }
-  function revenueOn(iso) { return sum(jobsOn(iso)); }
+  // Paid by the hour, the day's takings are what those hours are worth after
+  // the employer's deductions — that is the money that reaches the bank, and
+  // the bills are paid out of it. Per-job work stays gross, with tax set aside
+  // separately, because nobody has withheld anything for you.
+  function revenueOn(iso) {
+    return round2(sum(jobsOn(iso)) + (isHourly() ? netOn(iso) : 0));
+  }
   function costsOn(iso) { return sum(expensesOn(iso)); }
 
   function partnerRate() { return clamp((state.settings.partner || {}).value || 0, 0, 95) / 100; }
@@ -901,6 +1072,248 @@
   }
 
   /** The whole chain for one day. */
+  /* ---------------------------------------------------------------------------
+     4b. Paid by the hour
+     ---------------------------------------------------------------------------
+     A wage is not a job that pays $150 in cash. You earn it by the hour, the
+     employer keeps back the tax, and what lands in the bank arrives in a lump
+     every week or fortnight. So the app has to answer a different question:
+     how much of this paycheck is actually going to show up?
+
+     The tables below are the 2026 federal ones and an estimated state rate.
+     They get you close. What gets you exact is telling the app about one real
+     payslip — calibrate() then uses your own withholding and ignores the
+     tables entirely, W-4, health plan, local tax and all.
+     ------------------------------------------------------------------------ */
+
+  // IRS Rev. Proc. 2025-32 — brackets on taxable income, after the deduction.
+  var FED2026 = {
+    single:  { sd: 16100, bands: [[12400, .10], [50400, .12], [105700, .22],
+                                  [201775, .24], [256225, .32], [640600, .35], [Infinity, .37]] },
+    married: { sd: 32200, bands: [[24800, .10], [100800, .12], [211400, .22],
+                                  [403550, .24], [512450, .32], [768700, .35], [Infinity, .37]] },
+    head:    { sd: 24150, bands: [[17700, .10], [67450, .12], [105700, .22],
+                                  [201775, .24], [256200, .32], [640600, .35], [Infinity, .37]] }
+  };
+  var SS_BASE = 184500, SS_RATE = .062, MED_RATE = .0145, MED_MORE = .009, MED_OVER = 200000;
+
+  // A rate per state, picked for what an hourly wage actually lands in rather
+  // than the headline top rate. An estimate, and overridable — the label on
+  // screen says so, and a real payslip overrides the lot.
+  var STATES = [
+    ['AL', 'Alabama', .050], ['AK', 'Alaska', 0], ['AZ', 'Arizona', .025],
+    ['AR', 'Arkansas', .039], ['CA', 'California', .060], ['CO', 'Colorado', .044],
+    ['CT', 'Connecticut', .050], ['DE', 'Delaware', .052], ['DC', 'Washington DC', .060],
+    ['FL', 'Florida', 0], ['GA', 'Georgia', .0519], ['HI', 'Hawaii', .076],
+    ['ID', 'Idaho', .053], ['IL', 'Illinois', .0495], ['IN', 'Indiana', .0295],
+    ['IA', 'Iowa', .038], ['KS', 'Kansas', .0558], ['KY', 'Kentucky', .035],
+    ['LA', 'Louisiana', .030], ['ME', 'Maine', .0675], ['MD', 'Maryland', .0475],
+    ['MA', 'Massachusetts', .050], ['MI', 'Michigan', .0425], ['MN', 'Minnesota', .068],
+    ['MS', 'Mississippi', .040], ['MO', 'Missouri', .040], ['MT', 'Montana', .0565],
+    ['NE', 'Nebraska', .0455], ['NV', 'Nevada', 0], ['NH', 'New Hampshire', 0],
+    ['NJ', 'New Jersey', .035], ['NM', 'New Mexico', .049], ['NY', 'New York', .055],
+    ['NC', 'North Carolina', .0399], ['ND', 'North Dakota', .0195], ['OH', 'Ohio', .0275],
+    ['OK', 'Oklahoma', .045], ['OR', 'Oregon', .0875], ['PA', 'Pennsylvania', .0307],
+    ['RI', 'Rhode Island', .0475], ['SC', 'South Carolina', .060], ['SD', 'South Dakota', 0],
+    ['TN', 'Tennessee', 0], ['TX', 'Texas', 0], ['UT', 'Utah', .045],
+    ['VT', 'Vermont', .066], ['VA', 'Virginia', .0575], ['WA', 'Washington', 0],
+    ['WV', 'West Virginia', .0482], ['WI', 'Wisconsin', .044], ['WY', 'Wyoming', 0]
+  ];
+  // states that tax nothing under a threshold — big enough on a wage to matter
+  var STATE_FREE = { OH: 26050 };
+
+  function inc() { return state.settings.income || {}; }
+  function isHourly() { return inc().mode === 'hourly'; }
+  function stateRow(code) {
+    for (var i = 0; i < STATES.length; i++) if (STATES[i][0] === code) return STATES[i];
+    return null;
+  }
+  function stateName(code) { var r = stateRow(code); return r ? r[1] : ''; }
+  function stateRate(code) {
+    var o = inc();
+    if (o.stateRate != null) return clamp(o.stateRate, 0, 20) / 100;
+    var r = stateRow(code);
+    return r ? r[2] : 0;
+  }
+  function periodsPerYear(p) {
+    return p === 'weekly' ? 52 : p === 'semimonthly' ? 24 : p === 'monthly' ? 12 : 26;
+  }
+  function periodWords(p) {
+    return p === 'weekly' ? 'every week' : p === 'semimonthly' ? 'twice a month'
+      : p === 'monthly' ? 'once a month' : 'every two weeks';
+  }
+
+  /** Progressive federal tax on a year's taxable income. */
+  function fedTaxOn(taxable, filing) {
+    var t = FED2026[filing] || FED2026.single;
+    var left = Math.max(0, taxable), last = 0, owed = 0;
+    for (var i = 0; i < t.bands.length && left > 0; i++) {
+      var top = t.bands[i][0], rate = t.bands[i][1];
+      var slice = Math.min(left, top - last);
+      owed += slice * rate;
+      left -= slice; last = top;
+    }
+    return owed;
+  }
+
+  /** Every deduction a year of this wage would attract, itemised. */
+  function yearTax(gross, o) {
+    o = o || inc();
+    var filing = FED2026[o.filing] ? o.filing : 'single';
+    var preYear = round2((+o.preTax || 0) * periodsPerYear(o.period));
+    var wages = Math.max(0, gross - preYear);
+    var fed = fedTaxOn(Math.max(0, wages - FED2026[filing].sd), filing);
+    var ss = Math.min(wages, SS_BASE) * SS_RATE;
+    var med = wages * MED_RATE + Math.max(0, wages - MED_OVER) * MED_MORE;
+    var free = STATE_FREE[o.state] || 0;
+    var st = Math.max(0, wages - free) * stateRate(o.state);
+    var postYear = round2((+o.postTax || 0) * periodsPerYear(o.period));
+    return {
+      gross: round2(gross), preTax: preYear, postTax: postYear,
+      fed: round2(fed), ss: round2(ss), med: round2(med), state: round2(st),
+      total: round2(fed + ss + med + st + preYear + postYear),
+      net: round2(gross - fed - ss - med - st - preYear - postYear)
+    };
+  }
+
+  /** What a year of this looks like, from the hours logged or from what you told it. */
+  function expectedYear() {
+    var o = inc();
+    if (o.annual > 0) return round2(o.annual);
+    // project from what has actually been worked, once there is enough to mean
+    // anything — a single day is not a year.
+    var all = state.shifts || [];
+    if (!all.length || !(o.rate > 0)) return 0;
+    var dates = all.map(function (x) { return x.date; }).sort();
+    var span = Math.max(7, diffDays(dates[0], todayISO()) + 1);
+    var hrs = all.reduce(function (a, x) { return a + (+x.hours || 0); }, 0);
+    return round2(hrs / span * 365 * o.rate);
+  }
+
+  /**
+   * The share of a paycheck that survives to the bank.
+   * A real payslip wins outright: it already knows your W-4, your health plan
+   * and any city tax no table here has heard of.
+   */
+  function keepRate() {
+    var o = inc();
+    if (o.calib && o.calib.gross > 0 && o.calib.net >= 0) {
+      return clamp(o.calib.net / o.calib.gross, 0, 1);
+    }
+    var year = expectedYear();
+    if (!(year > 0)) return 1;
+    var t = yearTax(year, o);
+    return clamp(t.net / year, 0, 1);
+  }
+  function isCalibrated() { var c = inc().calib; return !!(c && c.gross > 0); }
+
+  /* ---- the hours themselves ---- */
+
+  function shiftsOn(iso) {
+    return (state.shifts || []).filter(function (x) { return x.date === iso; });
+  }
+  function hoursOn(iso) {
+    return round2(shiftsOn(iso).reduce(function (a, x) { return a + (+x.hours || 0); }, 0));
+  }
+  /** Monday-start week containing a date, so overtime is counted the way payroll does. */
+  function weekStart(iso) {
+    var d = fromISO(iso), dow = d.getDay();
+    return addDays(iso, dow === 0 ? -6 : 1 - dow);
+  }
+  function hoursInWeek(iso) {
+    var start = weekStart(iso), n = 0;
+    for (var i = 0; i < 7; i++) n += hoursOn(addDays(start, i));
+    return round2(n);
+  }
+  /**
+   * Gross for one day's hours, with overtime priced at the point in the week
+   * the day actually falls — the 9th hour of a 48-hour week is overtime, the
+   * same hour in a 30-hour week is not.
+   */
+  function grossOn(iso) {
+    var o = inc();
+    if (!isHourly() || !(o.rate > 0)) return 0;
+    var todayHrs = hoursOn(iso);
+    if (!todayHrs) return 0;
+    var start = weekStart(iso), before = 0;
+    for (var i = 0; i < 7; i++) {
+      var d = addDays(start, i);
+      if (d === iso) break;
+      before += hoursOn(d);
+    }
+    var cap = Math.max(0, (+o.otAfter || 40) - before);
+    var plain = Math.min(todayHrs, cap);
+    var over = Math.max(0, todayHrs - plain);
+    return round2(plain * o.rate + over * o.rate * (+o.otMult || 1.5));
+  }
+  /** What that day is worth once the employer has taken its cut. */
+  function netOn(iso) { return round2(grossOn(iso) * keepRate()); }
+
+  /* ---- pay periods ---- */
+
+  /**
+   * The work period covering a date, and the day it gets paid.
+   * Counted from a payday you told it about, so it lines up with your real
+   * calendar instead of an arbitrary one.
+   */
+  function payPeriod(iso) {
+    var o = inc();
+    var lag = Math.max(0, +o.lag || 0);
+    var end, start, pay;
+    if (o.period === 'monthly') {
+      var d = fromISO(iso);
+      start = toISO(new Date(d.getFullYear(), d.getMonth(), 1));
+      end = toISO(new Date(d.getFullYear(), d.getMonth() + 1, 0));
+    } else if (o.period === 'semimonthly') {
+      var dd = fromISO(iso), day = dd.getDate();
+      if (day <= 15) {
+        start = toISO(new Date(dd.getFullYear(), dd.getMonth(), 1));
+        end = toISO(new Date(dd.getFullYear(), dd.getMonth(), 15));
+      } else {
+        start = toISO(new Date(dd.getFullYear(), dd.getMonth(), 16));
+        end = toISO(new Date(dd.getFullYear(), dd.getMonth() + 1, 0));
+      }
+    } else {
+      var len = o.period === 'weekly' ? 7 : 14;
+      // Anchor on the work period that ends `lag` days before a known payday,
+      // then step to the period *containing* this date — the first one whose
+      // end falls on or after it. Stepping to the one after instead left the
+      // date outside its own pay period, which showed a paycheck of nothing.
+      var anchorEnd = o.payday ? addDays(o.payday, -lag) : todayISO();
+      var steps = Math.ceil(diffDays(anchorEnd, iso) / len);
+      end = addDays(anchorEnd, steps * len);
+      start = addDays(end, -(len - 1));
+    }
+    pay = addDays(end, lag);
+    return { start: start, end: end, pay: pay };
+  }
+
+  /** Hours and money for one pay period. */
+  function periodPay(p) {
+    var hrs = 0, gross = 0;
+    var span = clamp(diffDays(p.start, p.end), 0, 40);
+    var iso = p.start;
+    for (var i = 0; i <= span; i++) {
+      hrs += hoursOn(iso);
+      gross += grossOn(iso);
+      iso = addDays(iso, 1);
+    }
+    gross = round2(gross);
+    var keep = keepRate();
+    return { start: p.start, end: p.end, pay: p.pay, hours: round2(hrs),
+             gross: gross, net: round2(gross * keep), keep: keep };
+  }
+
+  /** This period and the one before it, which is usually the one about to land. */
+  function thisPay() { return periodPay(payPeriod(todayISO())); }
+  function nextPayday() {
+    var t = todayISO(), p = payPeriod(t);
+    // the period you are in pays later; a finished one may pay sooner
+    var prev = periodPay(payPeriod(addDays(p.start, -1)));
+    if (diffDays(t, prev.pay) >= 0) return prev;
+    return periodPay(p);
+  }
+
   function dayMoney(iso) {
     var rev = revenueOn(iso);
     var cost = costsOn(iso);
@@ -927,7 +1340,10 @@
       billsShort: day ? day.remainingTotal : 0,
       // what today's takings are still asked to cover
       billsAsk: owed,
-      jobs: jobsOn(iso).length,
+      // Hours count as work logged. Without this a day of wage work reads as
+      // an empty day: the hero shows the break-even instead of what you made.
+      jobs: jobsOn(iso).length + (isHourly() ? shiftsOn(iso).length : 0),
+      hours: isHourly() ? hoursOn(iso) : 0,
       // what the work itself made you, before any bill money moves
       earned: spare,
       takeHome: round2(spare - toBills)
@@ -1115,6 +1531,102 @@
   }
 
   /**
+   * What the daily plan adds up to over the days still ahead in the month the
+   * Plan tab is showing. Deliberately not the same thing as what this month's
+   * bills still need: the days left are already putting money toward bills
+   * that land later, so this runs higher. The ? on that row says so out loud.
+   *
+   * The calendar used to total this up as it drew the cells, which meant the
+   * row and its explanation counted the same thing twice, in two places.
+   */
+  function planAskLeft(cm) {
+    var t = todayISO();
+    var c = cm || calMonth || { y: fromISO(t).getFullYear(), m: fromISO(t).getMonth() };
+    var days = new Date(c.y, c.m + 1, 0).getDate();
+    var lastISO = toISO(new Date(c.y, c.m, days));
+    if (diffDays(t, lastISO) < 0) return 0;          // the month has already gone
+    // For the month you are actually in, this is the same question restOfMonth
+    // already answers — so ask it, rather than keeping a second sum that can
+    // drift away from the first.
+    if (c.y === fromISO(t).getFullYear() && c.m === fromISO(t).getMonth()) {
+      return round2(restOfMonth().stillToSetAside);
+    }
+    var sim = simulate(t, lastISO);
+    var total = 0, iso = toISO(new Date(c.y, c.m, 1));
+    for (var d = 1; d <= days; d++) {
+      if (!isPast(iso) && sim[iso]) total += sim[iso].remainingTotal;
+      iso = addDays(iso, 1);
+    }
+    return round2(total);
+  }
+
+  /**
+   * What the rest of this month still asks for.
+   *
+   * Two honest answers, because they are different questions. `stillToSetAside`
+   * is what the plan asks for across the days left in the month — the number to
+   * act on. `billsLeft` is the bills actually landing before the month is out
+   * and what each still needs, which is what "the rest of the month" means when
+   * you have just paid one off.
+   */
+  function restOfMonth(fromISO_) {
+    var from = fromISO_ || todayISO();
+    var m = monthWindow(from);
+    var end = m.end;
+
+    // the plan, for the days that are left
+    var sim = simulate(from, diffDays(from, end) >= 0 ? end : from);
+    var stillToSetAside = 0, daysLeft = 0;
+    var iso = from;
+    for (var i = 0; i <= clamp(diffDays(from, end), 0, 40); i++) {
+      var cell = sim[iso];
+      if (cell) {
+        stillToSetAside += cell.remainingTotal;
+        if (cell.funding) daysLeft++;
+      }
+      iso = addDays(iso, 1);
+    }
+
+    // the bills themselves, and what each of them still wants
+    var billsLeft = [];
+    activeBills().forEach(function (b) {
+      if (!b.dueDate) return;
+      // Anywhere in the month, not just from today: a bill whose date has gone
+      // by without being marked paid is still one you have to pay this month.
+      if (diffDays(m.start, b.dueDate) < 0 || diffDays(b.dueDate, end) < 0) return;
+      var left = round2(Math.max(0, b.amount - savedFor(b)));
+      billsLeft.push({ bill: b, date: b.dueDate, amount: b.amount, remaining: left });
+    });
+    billsLeft.sort(function (a, z) { return diffDays(z.date, a.date); });
+
+    // what has already been handed over for bills that landed this month
+    var paidThisMonth = 0, paidCount = 0;
+    activeBills().concat(state.bills.filter(function (b) { return b.archived; }))
+      .forEach(function (b) {
+        (b.paidHistory || []).forEach(function (h) {
+          if (!h.due) return;
+          if (diffDays(m.start, h.due) < 0 || diffDays(h.due, end) < 0) return;
+          paidThisMonth += h.amount; paidCount++;
+        });
+      });
+
+    return {
+      month: m, end: end,
+      billsLeft: billsLeft,
+      // what you still have to hand over before the month is out
+      leftToPay: round2(billsLeft.reduce(function (a, x) { return a + x.amount; }, 0)),
+      // of that, what is not yet put by
+      leftToFind: round2(billsLeft.reduce(function (a, x) { return a + x.remaining; }, 0)),
+      billsLeftTotal: round2(billsLeft.reduce(function (a, x) { return a + x.remaining; }, 0)),
+      paidThisMonth: round2(paidThisMonth),
+      paidCount: paidCount,
+      stillToSetAside: round2(stillToSetAside),
+      daysLeft: daysLeft,
+      perDay: daysLeft > 0 ? round2(stillToSetAside / daysLeft) : round2(stillToSetAside)
+    };
+  }
+
+  /**
    * Money with no bill attached to it.
    *
    * Of everything the work has made you, some has gone to bills and some of
@@ -1217,6 +1729,62 @@
     return added;
   }
 
+  /**
+   * Make the app's bill money match what is actually in the bank.
+   *
+   * The ledger drifts: money gets spent, a day goes unlogged, a transfer is
+   * rounded. Rather than argue with reality, take the real figure and record
+   * the difference.
+   *
+   * Extra goes in the way any money does — nearest due date first. A shortfall
+   * comes back off in the opposite order, furthest due date first, so the bills
+   * landing soonest keep their funding and the pain lands on the ones with the
+   * most time to recover.
+   */
+  function reconcileTo(actual, note) {
+    var have = vaultTotal();
+    var diff = round2(actual - have);
+    if (Math.abs(diff) <= 0.004) return { diff: 0, moves: [] };
+
+    var moves = [];
+    if (diff > 0) {
+      var res = allocate(diff, todayISO());
+      if (res.leftover > 0.004) res.alloc.push({ billId: BUFFER_ID, amount: res.leftover });
+      logContributions(todayISO(), res.alloc, {
+        src: 'adjust', note: note || 'Balance corrected to match your bank'
+      });
+      res.alloc.forEach(function (a) {
+        var bb = a.billId === BUFFER_ID ? null : billById(a.billId);
+        moves.push({ name: bb ? bb.name : 'Extra buffer', amount: round2(a.amount) });
+      });
+    } else {
+      // Claw back, buffer first, then the bills with the most time left.
+      var left = round2(-diff);
+      var take = function (billId, name, available) {
+        if (left <= 0.004 || available <= 0.004) return;
+        var amt = round2(Math.min(available, left));
+        state.contributions.push({
+          id: uid(), billId: billId,
+          cycle: billId === BUFFER_ID ? 0 : (billById(billId) || {}).cycle || 0,
+          date: todayISO(), amount: -amt,
+          note: note || 'Balance corrected to match your bank',
+          src: 'adjust', ts: Date.now()
+        });
+        left = round2(left - amt);
+        moves.push({ name: name, amount: -amt });
+      };
+
+      take(BUFFER_ID, 'Extra buffer', bufferTotal());
+      // furthest due date first — diffDays(a, b) is b minus a, so this puts
+      // the latest date at the front
+      activeBills().slice().sort(function (a, b) {
+        return diffDays(a.dueDate || '9999-12-31', b.dueDate || '9999-12-31');
+      }).forEach(function (b) { take(b.id, b.name, savedFor(b)); });
+      rev++;
+    }
+    return { diff: diff, moves: moves, before: have, after: vaultTotal() };
+  }
+
   function removeContributions(ids) {
     state.contributions = state.contributions.filter(function (c) { return ids.indexOf(c.id) === -1; });
     rev++;
@@ -1290,7 +1858,8 @@
     });
   }
 
-  function markPaid(b) {
+  /** Settle a bill in state. No saving, no redraw — see markPaid. */
+  function applyPaid(b) {
     var saved = savedFor(b);
     var surplus = round2(saved - b.amount);
     var next = advanceDue(b);
@@ -1314,8 +1883,45 @@
         });
       }
     }
+    rev++;
+    return { saved: saved, surplus: surplus, next: next };
+  }
+
+  /**
+   * Where the month lands if this bill is paid — worked out by actually doing
+   * it on a copy and putting the copy back. Saying "after this" about a figure
+   * measured before the change is how a confirm screen starts lying.
+   */
+  function previewAfterPaid(b) {
+    var snapshot = JSON.parse(JSON.stringify(state));
+    var out;
+    try {
+      applyPaid(billById(b.id) || b);
+      out = restOfMonth();
+    } finally {
+      state = snapshot;
+      rev++;                 // the contribution index is keyed on it
+    }
+    return out;
+  }
+
+  function markPaid(bill) {
+    // Re-resolve from current state: previewing what a payment would do swaps
+    // state for a restored copy, which leaves any held reference orphaned.
+    var b = billById(bill.id) || bill;
+    var res = applyPaid(b);
+    var saved = res.saved;
     save(); render();
-    toast('🎉 ' + b.name + ' paid' + (surplus > 0.004 ? ' · ' + money(surplus) + ' rolled forward' : ''));
+    // The question right after paying a bill is always the same one: what is
+    // left to find before this month is out. Answer it without being asked.
+    var rest = restOfMonth();
+    toast('🎉 ' + b.name + ' paid · ' + money(round2(Math.min(saved, b.amount))) +
+      ' out of your bill money<br><strong>' +
+      (rest.leftToPay > 0.004
+        ? money(rest.leftToPay) + ' left to pay in ' +
+          MON_LONG[fromISO(rest.end).getMonth()] +
+          (rest.leftToFind > 0.004 ? ' · ' + money(rest.leftToFind) + ' still to find' : ', all set aside')
+        : 'Every bill this month is paid') + '</strong>');
   }
 
   function advanceDue(b) {
@@ -1500,14 +2106,20 @@
 
     saved: function () {
       var list = sortedStatuses();
+      var rows = list.filter(function (x) { return x.saved > 0.004; })
+        .map(function (x) { return [(x.bill.icon || '') + ' ' + x.bill.name, x.saved]; });
+      var buf = bufferTotal();
+      if (Math.abs(buf) > 0.004) rows.push(['💰 Extra buffer', buf]);
       return {
         title: 'What is this total?',
-        lead: 'Every dollar you have set aside so far, across all your bills. It should ' +
-          'match what is actually sitting in your bill money.',
-        rows: list.filter(function (x) { return x.saved > 0.004; })
-          .map(function (x) { return [(x.bill.icon || '') + ' ' + x.bill.name, x.saved]; }),
-        total: ['Set aside so far', round2(list.reduce(function (a, x) { return a + x.saved; }, 0))],
-        foot: ''
+        lead: 'The money you are holding for bills right now, spread across them. Money ' +
+          'that has gone out on a bill you marked paid is no longer counted — that is why ' +
+          'this drops each time you pay one.',
+        rows: rows,
+        total: ['Bill money you are holding', vaultTotal()],
+        foot: 'If that is not what is actually there, tap <strong>Set the real amount</strong> ' +
+          'below and put in the true figure. The app will square itself up rather than ' +
+          'carry on with a number you know is wrong.'
       };
     },
 
@@ -1546,23 +2158,167 @@
       };
     },
 
+    restmonth: function () {
+      var r = restOfMonth();
+      return {
+        title: 'What is left to pay in ' + MON_LONG[fromISO(r.end).getMonth()] + '?',
+        lead: r.billsLeft.length
+          ? 'The bills still to land before the month is out. Ones you have already ' +
+            'marked paid are not counted — that is the point of marking them.'
+          : 'Every bill that lands this month is paid. Nothing else is coming before the ' +
+            'month is out.',
+        rows: r.billsLeft.map(function (x) {
+          return [(x.bill.icon || '🧾') + ' ' + x.bill.name + ' — due ' + fmtDate(x.date) +
+            (x.remaining <= 0.004 ? ' (already set aside)' : ''), x.amount];
+        }),
+        total: ['Left to pay this month', r.leftToPay],
+        foot: (r.leftToFind > 0.004
+          ? money(round2(r.leftToPay - r.leftToFind)) + ' of that is already in your bill ' +
+            'money, so <strong>' + money(r.leftToFind) + '</strong> is what you still have to find. '
+          : 'All of it is already in your bill money. ') +
+          (r.paidThisMonth > 0.004
+            ? plural(r.paidCount, 'bill') + ' worth ' + money(r.paidThisMonth) +
+              ' went out earlier this month and is not counted here.'
+            : '')
+      };
+    },
+
+    paycheck: function () {
+      var o = inc(), nx = nextPayday(), year = expectedYear();
+      var rows = [['Hours × ' + money(o.rate), nx.gross]];
+      var foot;
+      if (isCalibrated()) {
+        foot = 'Worked out from the payslip you gave it: ' + money(o.calib.gross) +
+          ' gross, ' + money(o.calib.net) + ' landed, so <strong>' +
+          Math.round(100 * nx.keep) + '%</strong> survives. That beats any table, because ' +
+          'it already knows your W-4, your health plan and any city tax.';
+        rows.push(['Everything withheld, at ' + Math.round(100 * (1 - nx.keep)) + '%',
+                   -round2(nx.gross - nx.net)]);
+      } else if (year > 0) {
+        var t = yearTax(year, o), f = nx.gross / year;
+        if (t.preTax > 0.004) rows.push(['Before-tax deductions', -round2(t.preTax * f)]);
+        rows.push(['Federal income tax', -round2(t.fed * f)]);
+        rows.push(['Social Security (6.2%)', -round2(t.ss * f)]);
+        rows.push(['Medicare (1.45%)', -round2(t.med * f)]);
+        if (t.state > 0.004) rows.push([stateName(o.state) + ' tax', -round2(t.state * f)]);
+        if (t.postTax > 0.004) rows.push(['After-tax deductions', -round2(t.postTax * f)]);
+        foot = 'Spread from a year at about ' + money(year) + ', using the 2026 federal ' +
+          'tables and an estimated rate for ' + (o.state ? esc(stateName(o.state)) : 'your state') +
+          '. It cannot know your W-4 or your health plan, so it will be a little out. ' +
+          '<strong>Put one real payslip in under More and it stops guessing.</strong>';
+      } else {
+        foot = 'Log some hours, or fill in what you expect to make this year, and this ' +
+          'becomes a real estimate rather than a blank.';
+      }
+      return {
+        title: 'Where does that paycheck come from?',
+        lead: plural(nx.hours, 'hour') + ' between ' + fmtDate(nx.start) + ' and ' +
+          fmtDate(nx.end) + ', landing ' + fmtDate(nx.pay) + '.',
+        rows: rows,
+        total: ['What should land', nx.net],
+        foot: foot
+      };
+    },
+
+    waiting: function () {
+      var w = awaitingPayment();
+      return {
+        title: 'Why is it asking me about these?',
+        lead: 'Their due date has come round. The app cannot see your bank, so it does not ' +
+          'know whether the money has actually gone out — and until you say, it keeps ' +
+          'holding that money for this round instead of saving for the next one.',
+        rows: w.map(function (x) {
+          return [(x.bill.icon || '🧾') + ' ' + x.bill.name + ' — due ' + fmtDate(x.bill.dueDate),
+                  x.saved];
+        }),
+        total: ['Being held for bills already due',
+                round2(w.reduce(function (a, x) { return a + x.saved; }, 0))],
+        foot: 'Tap <strong>✓ Paid</strong> and that money leaves your bill money, the bill ' +
+          'starts saving for its next round, and the daily amount picks it up. The Plan tab ' +
+          'already assumes you will — which is why its days keep asking past this one.'
+      };
+    },
+
+    tofind: function () {
+      var list = sortedStatuses().filter(function (x) { return x.remaining > 0.004; });
+      var rm = restOfMonth();
+      return {
+        title: 'What does "still to find" cover?',
+        lead: 'Every bill you track, whatever month it lands in — what each one needs ' +
+          'that you have not put by yet.',
+        rows: list.map(function (x) {
+          return [(x.bill.icon || '🧾') + ' ' + x.bill.name + ' — due ' + fmtDate(x.bill.dueDate),
+                  x.remaining];
+        }),
+        total: ['Still to find, all bills', round2(list.reduce(function (a, x) { return a + x.remaining; }, 0))],
+        foot: 'This is why it goes <em>up</em> when you pay a bill: the one you just settled ' +
+          'starts saving for its next round, and that round is now owed. ' +
+          (rm.leftToFind > 0.004
+            ? 'Only <strong>' + money(rm.leftToFind) + '</strong> of it belongs to bills ' +
+              'landing this month.'
+            : 'None of it belongs to bills landing this month — it is all for later ones.')
+      };
+    },
+
+    monthmoney: function () {
+      var rm = restOfMonth();
+      var ask = planAskLeft();
+      var rows = sortedStatuses().filter(function (x) { return x.saved > 0.004; })
+        .map(function (x) { return [(x.bill.icon || '🧾') + ' ' + x.bill.name, x.saved]; });
+      var buf = bufferTotal();
+      if (Math.abs(buf) > 0.004) rows.push(['💰 Extra buffer', buf]);
+      return {
+        title: 'What is in your bill money?',
+        lead: 'The money you are holding for bills right now — the same figure as on the ' +
+          'Bills tab. Money that has gone out on a bill you marked paid is no longer in here, ' +
+          'which is why it drops each time you pay one.',
+        rows: rows,
+        total: ['In your bill money now', vaultTotal()],
+        foot: (rm.paidThisMonth > 0.004
+          ? money(rm.paidThisMonth) + ' went out on bills earlier this month, so it is not ' +
+            'counted here. '
+          : '') +
+          'It covers every bill you track, including ones due next month, so it is bigger ' +
+          'than what this month alone still needs.' +
+          (ask > 0.004
+            ? ' The second figure on that row, <strong>' + money(ask) + '</strong>, ' +
+              'is something else again: it is what the daily amounts add up to over the days ' +
+              'you have left this month. The plan does not stop at the bill it is saving for ' +
+              'now — once a bill is due it starts on the next round — so that figure tracks ' +
+              'what the month costs rather than going quiet between bills.'
+            : '')
+      };
+    },
+
     monthbills: function () {
       var cm = calMonth || { y: fromISO(todayISO()).getFullYear(), m: fromISO(todayISO()).getMonth() };
       var list = billsDueIn(cm.y, cm.m);
       return {
-        title: 'What is due in ' + MON_LONG[cm.m] + '?',
+        title: 'What is left to pay in ' + MON_LONG[cm.m] + '?',
         lead: list.length
-          ? 'Every bill that lands in this month, whatever its rhythm — added up so you ' +
-            'know what the month costs before it arrives.'
+          ? 'Every bill that lands in this month, whatever its rhythm. Ones already marked ' +
+            'paid are shown but do not count toward the figure on the row.'
           : 'Nothing falls due this month, so the daily amounts are all building toward ' +
             'later months.',
         rows: list.map(function (x) {
           return [(x.bill.icon || '🧾') + ' ' + x.bill.name + ' — ' + fmtDate(x.date) +
             (x.paid ? ' (paid)' : ''), x.amount];
         }),
-        total: ['Due in ' + MON_LONG[cm.m], round2(list.reduce(function (a, x) { return a + x.amount; }, 0))],
-        foot: 'This is what the month is asked to pay. The daily figure covers it a few ' +
-          'days early, which is why the two do not match.'
+        total: ['Left to pay in ' + MON_LONG[cm.m],
+                round2(list.reduce(function (a, x) { return a + (x.paid ? 0 : x.amount); }, 0))],
+        foot: (function () {
+          var paid = round2(list.reduce(function (a, x) { return a + (x.paid ? x.amount : 0); }, 0));
+          return (paid > 0.004
+            ? money(paid) + ' of the month\'s ' +
+              money(round2(list.reduce(function (a, x) { return a + x.amount; }, 0))) +
+              ' is already paid and taken off. '
+            : '') +
+            'The days on the calendar above should come to about this much: each bill is ' +
+            'saved for over the weeks before it lands, and starts again for the next round ' +
+            'once it is paid. They will not tie out to the penny — a bill near the start of ' +
+            'the month was part-funded last month, and one near the end is still being ' +
+            'funded into next.';
+        })()
       };
     },
 
@@ -1633,7 +2389,10 @@
     var t = todayISO();
     var bills = activeBills();
 
-    if (!bills.length && !state.jobs.length && !state.expenses.length) {
+    // Hours count as having started. Without this, someone paid a wage who has
+    // logged a week of shifts but no bills yet still sees the welcome screen.
+    if (!bills.length && !state.jobs.length && !state.expenses.length &&
+        !(state.shifts || []).length) {
       host.innerHTML = welcomeHTML();
       return;
     }
@@ -1653,6 +2412,25 @@
         'browsing tab — open the app in a normal tab instead. See More for the details.</div></div>';
     }
 
+    // A copy that never leaves the phone is not a backup. Say so, and keep
+    // saying it — snoozable for the day, never for good.
+    var age = backupAge();
+    var nagged = state.settings.backupNagDay === t;
+    if (!nagged && (age === null || age >= 7)) {
+      var hard = age === null || age >= 21;
+      html += '<div class="banner ' + (hard ? 'bad' : 'warn') + '"><span>💾</span>' +
+        '<div><strong>' + (age === null
+          ? 'Your bills have never been backed up'
+          : plural(age, 'day') + ' since your last backup') + '</strong>' +
+        'Everything lives on this phone only. If the browser clears its site data ' +
+        'it all goes, and nothing in the app can bring it back. One tap saves a copy ' +
+        'to Files or iCloud.' +
+        '<div class="btn-row mt"><button class="btn sm primary" data-act="share-backup">' +
+        '💾 Back up now</button>' +
+        '<button class="btn sm ghost" data-act="snooze-backup">Later</button></div>' +
+        '</div></div>';
+    }
+
     var undated = undatedBills();
     if (undated.length) {
       html += '<div class="banner warn"><span>📅</span><div><strong>' +
@@ -1665,17 +2443,19 @@
     var cls = 'hero', eyebrow, amount, sub;
     if (!m.jobs && !m.costs) {
       cls += ' is-off';
-      eyebrow = 'No jobs yet today';
+      eyebrow = isHourly() ? 'No hours yet today' : 'No jobs yet today';
       amount = be != null ? money(be) : '—';
       sub = be != null
         ? 'what today needs to make to cover it all'
-        : 'tap ＋ Job when you finish one';
+        : (isHourly() ? 'tap ＋ Hours when you have worked' : 'tap ＋ Job when you finish one');
     } else if (m.takeHome >= 0) {
       eyebrow = 'You keep today';
       amount = money(m.takeHome);
       // A hard day's work can still end at $0 kept. Say where it went rather
       // than leaving a bare zero to be puzzled over.
-      sub = money(m.revenue) + ' in across ' + plural(m.jobs, 'job');
+      sub = money(m.revenue) + ' in' + (isHourly()
+        ? ' from ' + plural(m.hours, 'hour') + ', after tax'
+        : ' across ' + plural(m.jobs, 'job'));
       if (m.bills > 0.004) sub += ' · ' + money(m.bills) + ' of it went to bills';
     } else {
       cls += ' is-urgent';
@@ -1690,11 +2470,14 @@
       '<div class="hero-amount">' + amount + '</div>' +
       '<div class="hero-sub">' + sub + '</div>' +
       '<div class="hero-actions"><div class="btn-row">' +
-      '<button class="btn primary" data-act="add-job">＋ Job</button>' +
+      (isHourly()
+        ? '<button class="btn primary" data-act="add-hours">＋ Hours</button>'
+        : '<button class="btn primary" data-act="add-job">＋ Job</button>') +
       '<button class="btn subtle" data-act="add-expense">＋ Expense</button>' +
       '</div>' +
       // A job you have done before is one tap, right where you would log a new one.
       (function () {
+        if (isHourly()) return '';
         var again = recentJobs(3);
         if (!again.length) return '';
         return '<div class="hero-again">' + again.map(function (r, i) {
@@ -1829,6 +2612,71 @@
         '<button class="btn sm" data-act="pay-partner">Record a payment</button>' +
         '<button class="btn sm ghost" data-act="go-business">See the history</button>' +
         '</div></div>';
+    }
+
+    /* ---- the paycheck, when that is how the money arrives ---- */
+    if (isHourly()) {
+      var o = inc();
+      if (!(o.rate > 0)) {
+        html += '<div class="banner warn"><span>⏱</span><div><strong>Add your hourly pay</strong>' +
+          'Hours are being logged, but with no rate they are worth nothing yet. ' +
+          '<button class="btn sm mt" data-act="pay-setup">Set it up</button></div></div>';
+      } else {
+        var pp = thisPay();
+        var nx = nextPayday();
+        var todayH = hoursOn(t);
+        html += '<div class="card"><div class="card-title">Your pay' + why('paycheck') +
+          '<span class="faint" style="text-transform:none;letter-spacing:0">' +
+          (isCalibrated() ? 'from your payslip' : 'estimated') + '</span></div>' +
+          '<div style="display:flex;align-items:baseline;justify-content:space-between;gap:10px;margin-bottom:4px">' +
+          '<div class="money" id="pay-net" style="font-size:1.6rem;font-weight:800;letter-spacing:-0.6px">' +
+          money(nx.net) + '</div>' +
+          '<div class="small dim">landing ' + fmtDate(nx.pay) + ' · ' + relDay(nx.pay) + '</div></div>' +
+          '<div class="hint mb">' + plural(nx.hours, 'hour') + ' · ' + money(nx.gross) +
+          ' before tax · you keep about ' + Math.round(100 * nx.keep) + '%</div>';
+
+        if (nx.end !== pp.end) {
+          html += '<div class="list-row"><div><div class="small">The one you are working now</div>' +
+            '<div class="lr-sub">' + fmtDate(pp.start) + ' – ' + fmtDate(pp.end) + ' · ' +
+            plural(pp.hours, 'hour') + ' so far · pays ' + fmtDate(pp.pay) + '</div></div>' +
+            '<div class="lr-amt">' + money(pp.net) + '</div></div>';
+        }
+        html += '<div class="list-row" style="border-bottom:none"><div><div class="small">' +
+          (todayH ? plural(todayH, 'hour') + ' logged today' : 'Nothing logged today') + '</div>' +
+          '<div class="lr-sub">' + (todayH
+            ? money(grossOn(t)) + ' before tax · about ' + money(netOn(t)) + ' after'
+            : 'tap ＋ Hours when you have worked') + '</div></div>' +
+          (todayH ? '<button class="btn sm ghost" data-act="add-hours">Add more</button>' : '') +
+          '</div>';
+        if (!isCalibrated()) {
+          html += '<div class="hint mt">This is an estimate from the 2026 tax tables. ' +
+            '<button class="btn sm ghost" data-act="pay-setup">Put in a real payslip</button> ' +
+            'and it uses your own withholding instead.</div>';
+        }
+        html += '</div>';
+      }
+    }
+
+    /* ---- bills the app is waiting on you to confirm ---- */
+    var waiting = awaitingPayment();
+    if (waiting.length) {
+      html += '<div class="card tight"><div class="card-title">' +
+        (waiting.length > 1 ? 'These bills have come due' : 'This bill has come due') +
+        why('waiting') + '</div>' +
+        '<div class="lr-sub">Tell the app once you have paid, and it starts saving for the ' +
+        'next round. Until then it keeps holding the money for this one.</div>';
+      waiting.forEach(function (w) {
+        html += '<div class="list-row"><div>' +
+          '<div>' + esc(w.bill.icon || '🧾') + ' ' + esc(w.bill.name) + '</div>' +
+          '<div class="lr-sub">due ' + fmtDate(w.bill.dueDate) +
+          (w.late > 0 ? ' · ' + plural(w.late, 'day') + ' ago' : ' · today') +
+          (w.short > 0.004
+            ? ' · still ' + money(w.short) + ' short'
+            : ' · ' + money(w.saved) + ' is set aside for it') + '</div></div>' +
+          '<button class="btn sm" data-act="mark-paid" data-id="' + w.bill.id + '">✓ Paid</button>' +
+          '</div>';
+      });
+      html += '</div>';
     }
 
     /* ---- the bill set-aside, still the thing that has to happen ---- */
@@ -2061,8 +2909,12 @@
       '<p>Log what a job pays and what the day costs. Add your bills and it works out what to ' +
       'put aside each day so every one is covered <strong>' + cushionWords() + ' before</strong> ' +
       'it\'s due — then tells you what is genuinely yours to keep.</p>' +
-      '<button class="btn primary" data-act="add-job">＋ Log a job</button>' +
+      (isHourly()
+        ? '<button class="btn primary" data-act="add-hours">＋ Log hours</button>'
+        : '<button class="btn primary" data-act="add-job">＋ Log a job</button>') +
       '<button class="btn mt" data-act="add-bill">＋ Add a bill</button>' +
+      '<button class="btn mt" data-act="pay-setup">' +
+      (isHourly() ? '⏱ How you get paid' : '⏱ I get paid by the hour') + '</button>' +
       '<button class="btn mt" data-act="import">📋 Paste a setup code</button>' +
       '</div>' +
       '<div class="sep"></div>' +
@@ -2133,18 +2985,34 @@
     }
 
     html += '<div class="card tight"><div class="stat-grid">' +
-      '<div class="stat"><div class="stat-val money">' + money0(totalSaved) + '</div>' +
+      '<div class="stat"><div class="stat-val money">' + money0(round2(totalSaved + buf)) + '</div>' +
       '<div class="stat-lbl">Set aside' + why('saved') + '</div></div>' +
       '<div class="stat"><div class="stat-val money">' + money0(Math.max(0, totalAmt - totalSaved)) + '</div>' +
-      '<div class="stat-lbl">Still to find</div></div>' +
+      '<div class="stat-lbl">Still to find' + why('tofind') + '</div></div>' +
       '<div class="stat"><div class="stat-val money">' + money0(perDayAll) + '</div>' +
       '<div class="stat-lbl">Each ' + unitWord() + why('perday') + '</div></div>' +
       '</div>';
+    var rest = restOfMonth();
+    var putBy = round2(rest.leftToPay - rest.leftToFind);
+    html += '<div class="list-row" style="margin-top:6px"><div><div>Left to pay in ' +
+      MON_LONG[fromISO(rest.end).getMonth()] + why('restmonth') + '</div>' +
+      '<div class="lr-sub">' + (rest.billsLeft.length
+        ? plural(rest.billsLeft.length, 'bill') + ' still to land' +
+          (putBy > 0.004 ? ' · ' + money(putBy) + ' of it already set aside' : '') +
+          (rest.paidThisMonth > 0.004 ? ' · ' + money(rest.paidThisMonth) + ' paid already' : '')
+        : (rest.paidThisMonth > 0.004
+          ? 'all ' + plural(rest.paidCount, 'bill') + ' this month are paid'
+          : 'no more bills land this month')) + '</div></div>' +
+      '<div class="lr-amt">' + money(rest.leftToPay) + '</div></div>';
     if (buf > 0.004) {
-      html += '<div class="list-row" style="margin-top:6px"><div><div>💰 Extra buffer</div>' +
+      html += '<div class="list-row"><div><div>💰 Extra buffer</div>' +
         '<div class="lr-sub">Banked beyond what your bills need</div></div>' +
         '<div class="lr-amt">' + money(buf) + '</div></div>';
     }
+    // The ledger drifts from the bank. Let the bank win.
+    html += '<div class="list-row" style="border-bottom:none"><div><div class="lr-sub">' +
+      'Spent some of it, or put more in? Tell the app what is really there.</div></div>' +
+      '<button class="btn sm ghost" data-act="set-balance">Set the real amount</button></div>';
     html += '</div>';
 
     list.forEach(function (s) { html += billCardHTML(s); });
@@ -2177,9 +3045,16 @@
     host.innerHTML = html;
   }
 
+  /** Was this bill settled today? Its card should say so, not look unfunded. */
+  function paidToday(b) {
+    var t = todayISO();
+    return (b.paidHistory || []).some(function (h) { return h.paidOn === t; });
+  }
+
   function billCardHTML(s) {
     var b = s.bill;
-    var h = '<button class="bill s-' + s.key + '" data-act="open-bill" data-id="' + b.id + '">';
+    var h = '<div class="bill-wrap">' +
+      '<button class="bill s-' + s.key + '" data-act="open-bill" data-id="' + b.id + '">';
     h += '<div class="bill-top">' +
       '<div class="bill-name">' + esc(b.icon || '🧾') + ' ' + esc(b.name) + '</div>' +
       '<div class="bill-amt">' + money(s.saved) + ' <small>/ ' + money(b.amount) + '</small></div>' +
@@ -2210,6 +3085,19 @@
         : '') +
       (s.key === 'behind' ? '<span>· <strong>' + money(s.shortfall) + ' behind pace</strong></span>' : '') +
       '</div></button>';
+
+    // Marking a bill done is the thing you come here to do on the day it is
+    // due, so it should not be three taps down inside a sheet.
+    if (paidToday(b)) {
+      h += '<div class="bill-foot done"><span>✓ Paid today · next one ' +
+        fmtDate(b.dueDate) + '</span></div>';
+    } else {
+      h += '<div class="bill-foot">' +
+        '<button class="btn sm" data-act="mark-paid" data-id="' + b.id + '">✓ Mark paid</button>' +
+        '<button class="btn sm ghost" data-act="add-money" data-id="' + b.id + '">＋ Add money</button>' +
+        '</div>';
+    }
+    h += '</div>';
     return h;
   }
 
@@ -2480,7 +3368,6 @@
 
     for (var blank = 0; blank < first.getDay(); blank++) html += '<div class="cal-cell blank"></div>';
 
-    var monthRequired = 0, monthActual = 0;
     for (var d = 1; d <= lastDay; d++) {
       var iso = toISO(new Date(calMonth.y, calMonth.m, d));
       var funding = isFundingDay(iso);
@@ -2495,7 +3382,6 @@
 
       if (past) {
         amt = dayActual(iso);
-        monthActual += amt;
         // Judge a past day by the money that actually went across, not by
         // whether a button was ever tapped. Setting money aside and never
         // pressing "complete day" is not a missed day.
@@ -2513,9 +3399,6 @@
         cls += ' past';
       } else {
         amt = cell ? cell.remainingTotal : 0;
-        monthRequired += amt;
-        // money banked today counts whether or not the day was marked complete
-        monthActual += dayActual(iso);
         if (rec && rec.completed) { cls += ' done'; mark = '✓'; }
       }
 
@@ -2536,14 +3419,45 @@
 
     var dueThisMonth = billsDueIn(calMonth.y, calMonth.m);
     var dueTotal = round2(dueThisMonth.reduce(function (a, x) { return a + x.amount; }, 0));
+    var duePaid = round2(dueThisMonth.reduce(function (a, x) { return a + (x.paid ? x.amount : 0); }, 0));
+    var dueLeft = round2(dueTotal - duePaid);
+    var leftCount = dueThisMonth.filter(function (x) { return !x.paid; }).length;
+    // The month's headline is what is still to hand over. Leaving bills you
+    // have already paid in the total makes paying one look like it did nothing.
     html += '<div class="sep"></div>' +
-      '<div class="list-row"><div>Bills due in ' + MON_LONG[calMonth.m] + why('monthbills') +
+      '<div class="list-row"><div>Left to pay in ' + MON_LONG[calMonth.m] + why('monthbills') +
       '<div class="lr-sub">' + (dueThisMonth.length
-        ? plural(dueThisMonth.length, 'bill') + ' landing this month'
+        ? (leftCount ? plural(leftCount, 'bill') + ' still to land' : 'every one is paid') +
+          (duePaid > 0.004
+            ? ' · ' + money(duePaid) + ' of ' + money(dueTotal) + ' already paid'
+            : ' · ' + money(dueTotal) + ' for the month')
         : 'nothing falls due this month') + '</div></div>' +
-      '<div class="lr-amt">' + money(dueTotal) + '</div></div>' +
-      '<div class="list-row"><div>Still to set aside this month</div><div class="lr-amt">' + money(monthRequired) + '</div></div>' +
-      '<div class="list-row"><div>Already set aside this month</div><div class="lr-amt">' + money(monthActual) + '</div></div>' +
+      '<div class="lr-amt">' + money(dueLeft) + '</div></div>';
+
+    // Two rows that follow on from each other, instead of three that argue.
+    // "Already set aside this month" used to sit here as a running total of
+    // everything ever put in during the month — so paying a bill emptied the
+    // pot without moving it, and the same words meant two different numbers
+    // on two different tabs.
+    var thisMonth = calMonth.y === fromISO(t).getFullYear() && calMonth.m === fromISO(t).getMonth();
+    if (thisMonth && dueLeft > 0.004) {
+      var rm = restOfMonth();
+      var readyFor = round2(rm.leftToPay - rm.leftToFind);
+      html += '<div class="list-row"><div class="lr-sub" style="padding-left:2px">' +
+        (readyFor > 0.004
+          ? money(readyFor) + ' of that is already set aside, so <strong>' +
+            money(rm.leftToFind) + '</strong> is still to find'
+          : 'none of it is set aside yet') + '</div></div>';
+    }
+
+    var planAsk = planAskLeft();
+    html += '<div class="list-row"><div>In your bill money now' + why('monthmoney') +
+      '<div class="lr-sub">across every bill, this month\'s and later' +
+      (planAsk > 0.004
+        ? ' · the days left in ' + MON_LONG[calMonth.m] + ' ask for ' +
+          money(planAsk) + ' more'
+        : '') + '</div></div>' +
+      '<div class="lr-amt">' + money(vaultTotal()) + '</div></div>' +
       '</div>';
 
     // upcoming bills timeline
@@ -2706,22 +3620,53 @@
       'so clearing Safari data erases it — and the app on your Home Screen keeps its own ' +
       'separate copy from Safari.</div>' +
       '<div class="list-row" style="border-top:1px solid var(--line);margin-top:6px">' +
-      '<div><div>App version</div><div class="lr-sub">Pull down to refresh if this looks old</div></div>' +
-      '<div class="lr-amt tiny faint">' + APP_VERSION + '</div></div></div>';
+      '<div><div>App version</div><div class="lr-sub">' + APP_VERSION + '</div></div>' +
+      '<button class="btn sm" data-act="force-update">Check for an update</button></div>' +
+      '<div class="hint">Safari can keep serving an old copy of the app for a while. This ' +
+      'throws that copy away and fetches the current one. <strong>It does not touch your ' +
+      'data</strong> — bills, hours and backups all stay exactly where they are.</div>' +
+      '</div>';
 
     html += '<div class="card"><div class="card-title">Your setup code</div>' +
       '<p class="small dim mb">The quickest way back if anything is ever lost: copy this and ' +
       'keep it in Notes. Pasting it into any copy of the app rebuilds your bills and splits.</p>' +
       '<button class="btn primary" data-act="my-code">⧉ Copy my setup code</button></div>';
 
+    html += '<div class="card"><div class="card-title">How you get paid</div>' +
+      '<p class="small dim mb">' + (isHourly()
+        ? 'By the hour' + (inc().rate > 0 ? ' at ' + money(inc().rate) : '') +
+          (inc().state ? ' in ' + esc(stateName(inc().state)) : '') +
+          ', paid ' + periodWords(inc().period) + '.' +
+          (isCalibrated() ? ' Using a real payslip for the tax.' : ' Tax estimated from the tables.')
+        : 'Per job — you log what each one pays and set your own tax aside.') + '</p>' +
+      '<button class="btn" data-act="pay-setup">' +
+      (isHourly() ? 'Change how you get paid' : 'I get paid by the hour instead') +
+      '</button></div>';
+
     html += '<div class="card"><div class="card-title">Backup</div>' +
       '<p class="small dim mb">Everything is stored on this device only. Clearing Safari data wipes it — ' +
       'save a backup file somewhere safe now and then.' +
       (s.lastBackup ? ' <strong>Last backup: ' + fmtDate(s.lastBackup) + '</strong>.' : ' <strong>You haven\'t backed up yet.</strong>') +
       '</p>' +
-      '<div class="btn-row mb"><button class="btn" data-act="export">⬇︎ Save backup</button>' +
+      '<div class="btn-row mb"><button class="btn primary" data-act="share-backup">💾 Back up now</button>' +
       '<button class="btn" data-act="copy-backup">⧉ Copy</button></div>' +
-      '<button class="btn ghost" data-act="import">📋 Paste a setup code or backup</button></div>';
+      '<button class="btn ghost" data-act="import">📋 Paste a setup code or backup</button>' +
+      (function () {
+        // The app keeps dated copies of its own. They cannot survive the browser
+        // dropping the whole site, but they undo a bad edit or a bad day.
+        var all = recoveryCopies();
+        if (!all.length) return '';
+        return '<div class="sep"></div><div class="card-title">On this device</div>' +
+          '<p class="small dim mb">Saved automatically as you go. These go with the rest ' +
+          'if site data is ever cleared — the backup above is the one that survives that.</p>' +
+          all.map(function (c, i) {
+            return '<div class="list-row"><div><div>' + esc(c.label) + '</div>' +
+              '<div class="lr-sub">' + plural(c.bills, 'bill') +
+              (c.jobs ? ' · ' + plural(c.jobs, 'job') : '') + '</div></div>' +
+              '<button class="btn sm" data-act="restore-copy" data-key="' + esc(c.key) + '">' +
+              (i === 0 ? '↩︎ Restore' : 'Restore') + '</button></div>';
+          }).join('');
+      })() + '</div>';
 
     html += '<div class="card"><div class="card-title">How the numbers are worked out</div>' +
       '<p class="small dim">For every bill:</p>' +
@@ -2994,13 +3939,14 @@
       }
     }
 
-    html += '<div class="btn-row mt" style="margin-bottom:8px">' +
-      '<button class="btn primary" data-act="add-money" data-id="' + b.id + '">＋ Add money</button>' +
-      '<button class="btn" data-act="mark-paid" data-id="' + b.id + '">Mark paid</button></div>' +
+    html += '<button class="btn primary mt" data-act="mark-paid" data-id="' + b.id + '" ' +
+      'style="margin-bottom:8px">✓ Mark this bill paid</button>' +
+      '<div class="btn-row" style="margin-bottom:8px">' +
+      '<button class="btn" data-act="add-money" data-id="' + b.id + '">＋ Add money</button>' +
+      '<button class="btn ghost" data-act="close-sheet">Close</button></div>' +
       '<div class="btn-row" style="margin-bottom:8px">' +
       '<button class="btn ghost" data-act="edit-bill" data-id="' + b.id + '">Name &amp; repeat</button>' +
-      '<button class="btn danger" data-act="delete-bill" data-id="' + b.id + '">Delete</button></div>' +
-      '<button class="btn ghost" data-act="close-sheet" style="margin-bottom:8px">Close</button>';
+      '<button class="btn danger" data-act="delete-bill" data-id="' + b.id + '">Delete</button></div>';
 
     if (hist.length) {
       html += '<div class="sep"></div><div class="card-title">This cycle\'s deposits</div>';
@@ -3100,6 +4046,60 @@
 
   /* ---- Money entry ------------------------------------------------------- */
 
+  /** "How much is actually in there?" — the app bends to the bank, not the other way. */
+  function balanceSheet() {
+    var have = vaultTotal();
+    var html = '<h2>What is really in your bill money?</h2>' +
+      '<div class="sheet-sub">Put in the amount you actually have set aside right now. ' +
+      'If you have dipped into it, or put in more than the app knows about, this is how ' +
+      'you tell it.</div>' +
+      '<div class="card tight"><div class="list-row" style="border-bottom:none">' +
+      '<div><div class="small">The app thinks you have</div>' +
+      '<div class="lr-sub">from everything you have logged</div></div>' +
+      '<div class="lr-amt">' + money(have) + '</div></div></div>' +
+      '<div class="field"><label>Actually in there</label>' +
+      '<input id="bal-amt" type="text" inputmode="decimal" value="' + have.toFixed(2) + '"></div>' +
+      '<div id="bal-preview" class="hint mb"></div>' +
+      '<button class="btn primary" id="bal-save" style="margin-bottom:8px">Use this amount</button>' +
+      '<button class="btn ghost" data-act="close-sheet">Cancel</button>';
+
+    openSheet(html, function (sheet) {
+      var input = $('#bal-amt', sheet);
+      var out = $('#bal-preview', sheet);
+
+      function preview() {
+        var v = parseFloat(input.value);
+        if (isNaN(v)) { out.textContent = ''; return; }
+        var diff = round2(v - have);
+        if (Math.abs(diff) <= 0.004) { out.innerHTML = 'That matches what the app has. Nothing changes.'; return; }
+        if (diff > 0) {
+          out.innerHTML = '<strong>' + money(diff) + ' more</strong> than the app has. It goes ' +
+            'onto your bills, nearest due date first, so your daily amount drops.';
+        } else {
+          out.innerHTML = '<strong>' + money(-diff) + ' less</strong> than the app has. It comes ' +
+            'back off the bills with the most time left, so the ones due soonest keep their ' +
+            'money — your daily amount goes up to make it back.';
+        }
+      }
+      input.addEventListener('input', preview);
+      preview();
+
+      $('#bal-save', sheet).addEventListener('click', function () {
+        var v = round2(parseFloat(input.value));
+        if (isNaN(v) || v < 0) return toast('⚠️ Enter the amount you have');
+        var before = JSON.parse(JSON.stringify(state.contributions));
+        var res = reconcileTo(v);
+        save(); closeSheet(); render();
+        if (!res.diff) return toast('✔️ Already matches — nothing changed');
+        lastUndo = { fn: function () { state.contributions = before; rev++; save(); render(); } };
+        toast((res.diff > 0 ? '➕ ' : '➖ ') + money(Math.abs(res.diff)) +
+          (res.diff > 0 ? ' added' : ' taken off') + '<br><strong>Bill money is now ' +
+          money(res.after) + '</strong>', 'Undo');
+      });
+      setTimeout(function () { input.focus(); input.select(); }, 220);
+    });
+  }
+
   function amountSheet(o) {
     // o: {title, sub, value, billId, date, allowComplete}
     var iso = o.date || todayISO();
@@ -3197,6 +4197,242 @@
   }
 
   /* ---- Logging work and costs -------------------------------------------- */
+
+  /**
+   * Logging hours. The same shape as logging a job — one number is enough,
+   * and everything else folds away.
+   */
+  function shiftSheet(shift, dateISO) {
+    var isNew = !shift;
+    var d = shift || { hours: '', date: dateISO || todayISO(), note: '' };
+    var o = inc();
+
+    var html = '<h2>' + (isNew ? 'Log hours' : 'Edit hours') + '</h2>' +
+      '<div class="sheet-sub">' + (o.rate > 0
+        ? 'At ' + money(o.rate) + ' an hour.'
+        : 'Set your hourly pay under More first, or these hours are worth nothing.') + '</div>' +
+      '<div class="field"><label>Hours worked</label>' +
+      '<input id="h-hrs" type="text" inputmode="decimal" value="' + (d.hours === '' ? '' : d.hours) +
+      '" placeholder="0"></div>' +
+      '<div class="chip-row mb" id="h-quick">' +
+      [4, 6, 8, 10, 12].map(function (n) {
+        return '<button type="button" class="chip" data-set="' + n + '">' + n + ' hrs</button>';
+      }).join('') + '</div>' +
+      '<div class="hint mb" id="h-worth"></div>' +
+      '<button class="btn primary" id="h-save" style="margin-bottom:10px">' +
+      (isNew ? 'Log it' : 'Save changes') + '</button>' +
+      '<details class="more-fields"' + (!isNew && (d.note || d.date !== todayISO()) ? ' open' : '') + '>' +
+      '<summary>Add details — date, note</summary>' +
+      '<div class="field-row">' +
+      '<div class="field"><label>Date</label><input id="h-date" type="date" value="' + esc(d.date) + '"></div>' +
+      '<div class="field"><label>Note (optional)</label>' +
+      '<input id="h-note" type="text" value="' + esc(d.note || '') + '" placeholder="e.g. covered a shift"></div>' +
+      '</div></details>';
+    if (!isNew) html += '<button class="btn danger" id="h-del" style="margin-bottom:8px">Delete these hours</button>';
+    html += '<button class="btn ghost" data-act="close-sheet">Cancel</button>';
+
+    openSheet(html, function (sheet) {
+      var input = $('#h-hrs', sheet);
+      var worth = $('#h-worth', sheet);
+      var dateEl = $('#h-date', sheet);
+
+      // Say what the hours are worth as they are typed, gross and after the
+      // employer's cut, because those are very different numbers.
+      var preview = function () {
+        var n = parseFloat(input.value);
+        if (!(n > 0) || !(o.rate > 0)) { worth.textContent = ''; return; }
+        var iso = dateEl ? dateEl.value : d.date;
+        var before = hoursOn(iso) - (isNew ? 0 : (+d.hours || 0));
+        var wk = hoursInWeek(iso) - (isNew ? 0 : (+d.hours || 0));
+        var cap = Math.max(0, (+o.otAfter || 40) - (wk - before));
+        var plain = Math.min(n, Math.max(0, cap - before));
+        var over = Math.max(0, n - plain);
+        var gross = round2(plain * o.rate + over * o.rate * (+o.otMult || 1.5));
+        worth.innerHTML = money(gross) + ' before tax' +
+          (over > 0.004 ? ' · ' + over + ' of them at overtime' : '') +
+          ' · about <strong>' + money(round2(gross * keepRate())) + '</strong> after';
+      };
+      input.addEventListener('input', preview);
+      if (dateEl) dateEl.addEventListener('change', preview);
+      $$('#h-quick .chip', sheet).forEach(function (c) {
+        c.addEventListener('click', function () { input.value = c.dataset.set; preview(); });
+      });
+      preview();
+
+      $('#h-save', sheet).addEventListener('click', function () {
+        var n = parseFloat(input.value);
+        if (!(n > 0)) { input.focus(); return; }
+        if (n > 24) n = 24;
+        var iso = dateEl ? dateEl.value : d.date;
+        var note = $('#h-note', sheet) ? $('#h-note', sheet).value.trim() : '';
+        if (isNew) {
+          state.shifts.push({ id: uid(), date: iso, hours: round2(n), note: note, ts: Date.now() });
+        } else {
+          shift.hours = round2(n); shift.date = iso; shift.note = note;
+        }
+        save(); closeSheet(); render();
+        toast('✅ ' + plural(round2(n), 'hour') + ' logged');
+      });
+
+      var del = $('#h-del', sheet);
+      if (del) del.addEventListener('click', function () {
+        state.shifts = state.shifts.filter(function (x) { return x.id !== shift.id; });
+        save(); closeSheet(); render();
+        toast('Hours removed');
+      });
+      setTimeout(function () { input.focus(); input.select(); }, 220);
+    });
+  }
+
+  /**
+   * Setting up a wage. The tables get you close; one real payslip gets you
+   * exact, so the calibration sits right here rather than buried.
+   */
+  function paySheet() {
+    var o = inc();
+    var year = expectedYear();
+    var t = year > 0 ? yearTax(year, o) : null;
+
+    var html = '<h2>How you get paid</h2>' +
+      '<div class="sheet-sub">Switch between working for yourself and working for a wage. ' +
+      'Nothing you have logged is deleted either way.</div>' +
+      '<div class="field"><label>Paid how?</label><div class="chip-row" id="p-mode">' +
+      [['jobs', '💵 Per job'], ['hourly', '⏱ By the hour']].map(function (x) {
+        return '<button type="button" class="chip' + (o.mode === x[0] ? ' on' : '') +
+          '" data-m="' + x[0] + '">' + x[1] + '</button>';
+      }).join('') + '</div></div>' +
+      '<div id="p-wage"' + (o.mode === 'hourly' ? '' : ' style="display:none"') + '>' +
+      '<div class="field-row">' +
+      '<div class="field"><label>Pay an hour</label>' +
+      '<input id="p-rate" type="text" inputmode="decimal" value="' + (o.rate || '') + '" placeholder="0.00"></div>' +
+      '<div class="field"><label>Overtime after</label>' +
+      '<input id="p-ot" type="text" inputmode="decimal" value="' + (o.otAfter || 40) + '" placeholder="40"></div>' +
+      '</div>' +
+      '<div class="field"><label>State</label><select id="p-state">' +
+      '<option value="">Choose your state…</option>' +
+      STATES.map(function (x) {
+        return '<option value="' + x[0] + '"' + (o.state === x[0] ? ' selected' : '') + '>' +
+          esc(x[1]) + (x[2] === 0 ? ' — no income tax' : '') + '</option>';
+      }).join('') + '</select></div>' +
+      '<div class="field"><label>Tax filing</label><div class="chip-row" id="p-filing">' +
+      [['single', 'Single'], ['married', 'Married, jointly'], ['head', 'Head of household']].map(function (x) {
+        return '<button type="button" class="chip' + (o.filing === x[0] ? ' on' : '') +
+          '" data-f="' + x[0] + '">' + x[1] + '</button>';
+      }).join('') + '</div></div>' +
+      '<div class="field"><label>Paid how often?</label><div class="chip-row" id="p-period">' +
+      [['weekly', 'Weekly'], ['biweekly', 'Every 2 weeks'],
+       ['semimonthly', 'Twice a month'], ['monthly', 'Monthly']].map(function (x) {
+        return '<button type="button" class="chip' + (o.period === x[0] ? ' on' : '') +
+          '" data-p="' + x[0] + '">' + x[1] + '</button>';
+      }).join('') + '</div></div>' +
+      '<div class="field-row">' +
+      '<div class="field"><label>A recent payday</label>' +
+      '<input id="p-payday" type="date" value="' + esc(o.payday || '') + '"></div>' +
+      '<div class="field"><label>Expected for the year</label>' +
+      '<input id="p-annual" type="text" inputmode="decimal" value="' + (o.annual || '') +
+      '" placeholder="worked out for you"></div>' +
+      '</div>' +
+      '<p class="small dim mb">Leave the year blank and it is worked out from the hours you ' +
+      'log. Filling it in makes the tax estimate steadier while there is not much logged yet.</p>' +
+      (t
+        ? '<div class="card tight mb"><div class="card-title">On ' + money(year) + ' a year</div>' +
+          '<div class="list-row"><div class="lr-sub">Federal tax</div><div class="lr-amt">' + money(t.fed) + '</div></div>' +
+          '<div class="list-row"><div class="lr-sub">Social Security &amp; Medicare</div>' +
+          '<div class="lr-amt">' + money(round2(t.ss + t.med)) + '</div></div>' +
+          '<div class="list-row"><div class="lr-sub">' +
+          (o.state ? esc(stateName(o.state)) + ' tax' : 'State tax — pick a state') + '</div>' +
+          '<div class="lr-amt">' + money(t.state) + '</div></div>' +
+          '<div class="list-row"><div><strong>You keep</strong></div><div class="lr-amt">' +
+          money(t.net) + ' <span class="lr-sub">' + Math.round(100 * t.net / year) + '%</span></div></div>' +
+          '</div>'
+        : '') +
+      '<details class="more-fields"><summary>Taken out of every paycheck</summary>' +
+      '<div class="field-row">' +
+      '<div class="field"><label>Before tax (401k, health)</label>' +
+      '<input id="p-pre" type="text" inputmode="decimal" value="' + (o.preTax || '') + '" placeholder="0.00"></div>' +
+      '<div class="field"><label>After tax</label>' +
+      '<input id="p-post" type="text" inputmode="decimal" value="' + (o.postTax || '') + '" placeholder="0.00"></div>' +
+      '</div>' +
+      '<div class="field"><label>Days between the end of a work period and payday</label>' +
+      '<input id="p-lag" type="text" inputmode="numeric" value="' + (o.lag == null ? 5 : o.lag) + '"></div>' +
+      '</details>' +
+      '<div class="card tight mt"><div class="card-title">Make it exact</div>' +
+      '<p class="small">The rates above are the published 2026 ones and an estimate for your ' +
+      'state. They cannot know your W-4, your health plan or a city tax. ' +
+      '<strong>Put in one real payslip and the app uses your own numbers instead.</strong></p>' +
+      '<div class="field-row">' +
+      '<div class="field"><label>Payslip: gross</label>' +
+      '<input id="p-cg" type="text" inputmode="decimal" value="' +
+      ((o.calib && o.calib.gross) || '') + '" placeholder="0.00"></div>' +
+      '<div class="field"><label>…and what landed</label>' +
+      '<input id="p-cn" type="text" inputmode="decimal" value="' +
+      ((o.calib && o.calib.net) || '') + '" placeholder="0.00"></div>' +
+      '</div>' +
+      '<div class="hint" id="p-cal">' + (isCalibrated()
+        ? 'Using your payslip: you keep <strong>' + Math.round(100 * keepRate()) + '%</strong>' +
+          (o.calib.on ? ' — from ' + fmtDate(o.calib.on) : '') + '.'
+        : 'Not set — using the tables.') + '</div>' +
+      (isCalibrated() ? '<button class="btn sm ghost mt" id="p-clear">Go back to the tables</button>' : '') +
+      '</div>' +
+      '</div>' +
+      '<button class="btn primary mt" id="p-save">Save</button>' +
+      '<button class="btn ghost" data-act="close-sheet">Cancel</button>';
+
+    openSheet(html, function (sheet) {
+      var mode = o.mode, filing = o.filing, period = o.period;
+      var wage = $('#p-wage', sheet);
+      $$('#p-mode .chip', sheet).forEach(function (c) {
+        c.addEventListener('click', function () {
+          mode = c.dataset.m;
+          $$('#p-mode .chip', sheet).forEach(function (x) { x.classList.toggle('on', x === c); });
+          wage.style.display = mode === 'hourly' ? '' : 'none';
+        });
+      });
+      $$('#p-filing .chip', sheet).forEach(function (c) {
+        c.addEventListener('click', function () {
+          filing = c.dataset.f;
+          $$('#p-filing .chip', sheet).forEach(function (x) { x.classList.toggle('on', x === c); });
+        });
+      });
+      $$('#p-period .chip', sheet).forEach(function (c) {
+        c.addEventListener('click', function () {
+          period = c.dataset.p;
+          $$('#p-period .chip', sheet).forEach(function (x) { x.classList.toggle('on', x === c); });
+        });
+      });
+      var clear = $('#p-clear', sheet);
+      if (clear) clear.addEventListener('click', function () {
+        $('#p-cg', sheet).value = ''; $('#p-cn', sheet).value = '';
+        $('#p-cal', sheet).textContent = 'Cleared on save — back to the tables.';
+      });
+
+      $('#p-save', sheet).addEventListener('click', function () {
+        var num = function (id, dflt) {
+          var v = parseFloat(($(id, sheet) || {}).value);
+          return isFinite(v) ? v : dflt;
+        };
+        var cg = num('#p-cg', 0), cn = num('#p-cn', -1);
+        var o2 = state.settings.income;
+        o2.mode = mode;
+        o2.rate = Math.max(0, num('#p-rate', 0));
+        o2.otAfter = clamp(num('#p-ot', 40), 0, 168);
+        o2.state = ($('#p-state', sheet) || {}).value || '';
+        o2.filing = filing;
+        o2.period = period;
+        o2.payday = ($('#p-payday', sheet) || {}).value || null;
+        var yr = num('#p-annual', 0);
+        o2.annual = yr > 0 ? yr : null;
+        o2.preTax = Math.max(0, num('#p-pre', 0));
+        o2.postTax = Math.max(0, num('#p-post', 0));
+        o2.lag = clamp(num('#p-lag', 5), 0, 30);
+        o2.calib = (cg > 0 && cn >= 0) ? { gross: round2(cg), net: round2(cn), on: todayISO() } : null;
+        save(); closeSheet(); render();
+        toast(mode === 'hourly'
+          ? (o2.rate > 0 ? '✅ Set up — ' + money(o2.rate) + ' an hour' : '✅ Saved — add your hourly pay next')
+          : '✅ Back to logging jobs');
+      });
+    });
+  }
 
   function jobSheet(job, dateISO) {
     var isNew = !job;
@@ -3713,6 +4949,78 @@
      9. Backup / restore
      ------------------------------------------------------------------------ */
 
+  /**
+   * Throw away every cached copy of the app and come back on the current one.
+   *
+   * A phone can sit on an old build for a long time: the files are served with
+   * a ten-minute cache header, but Safari — and a Home Screen app especially,
+   * where there is no address bar to pull on — will hold them far longer than
+   * that. Versioned file names fix it going forward; this is the button for a
+   * phone that is already stuck.
+   *
+   * Nothing here touches localStorage. Caches hold the app, not your data.
+   */
+  function forceUpdate() {
+    var jobs = [];
+    try {
+      if (window.caches && caches.keys) {
+        jobs.push(caches.keys().then(function (keys) {
+          return Promise.all(keys.filter(function (k) {
+            return k.indexOf('billcushion-') === 0;
+          }).map(function (k) { return caches.delete(k); }));
+        }));
+      }
+      if (navigator.serviceWorker && navigator.serviceWorker.getRegistrations) {
+        jobs.push(navigator.serviceWorker.getRegistrations().then(function (rs) {
+          return Promise.all(rs.map(function (r) { return r.unregister(); }));
+        }));
+      }
+    } catch (e) { /* no caches API, or blocked — the reload still helps */ }
+    toast('Fetching the current version…');
+    var go = function () {
+      // a one-off query so the page itself cannot come from the cache either
+      try { location.replace(location.pathname + '?u=' + Date.now()); }
+      catch (e) { location.reload(); }
+    };
+    if (!jobs.length) { setTimeout(go, 300); return; }
+    Promise.all(jobs).then(go, go);
+  }
+
+  function markBackedUp() {
+    state.settings.lastBackup = todayISO();
+    state.settings.backupNagDay = null;
+    save(); render();
+  }
+
+  /** How long since a copy last left this device. null = never. */
+  function backupAge() {
+    var lb = state.settings.lastBackup;
+    return lb ? diffDays(lb, todayISO()) : null;
+  }
+
+  /**
+   * The only kind of backup that survives the browser dropping the site: one
+   * that leaves the phone. iOS will not let a page write a file on its own, so
+   * this is one tap — the share sheet, straight into Files, iCloud or Notes.
+   */
+  function shareBackup() {
+    var name = 'ledger-backup-' + todayISO() + '.json';
+    var text = JSON.stringify(state, null, 2);
+    try {
+      var file = new File([text], name, { type: 'application/json' });
+      if (navigator.share && navigator.canShare && navigator.canShare({ files: [file] })) {
+        navigator.share({ files: [file], title: name }).then(function () {
+          markBackedUp();
+          toast('✅ Backed up — keep that file somewhere you can find it');
+        }, function () {
+          // cancelled, or the sheet refused it: not a backup, so do not claim one
+        });
+        return;
+      }
+    } catch (e) { /* no File, no share: fall back to a download */ }
+    exportData();
+  }
+
   function exportData() {
     var text = JSON.stringify(state, null, 2);
     var name = 'bill-cushion-backup-' + todayISO() + '.json';
@@ -4018,8 +5326,14 @@
    * Never silently present an empty app to someone who had data in it.
    */
   function offerRecovery() {
-    if (loadState !== 'corrupt') return;
+    if (loadState !== 'corrupt' && loadState !== 'empty') return;
     var good = lastGood();
+    // An empty store used to slip through here and open a blank app, even with
+    // a perfectly good backup sitting beside it. If a device loses the main
+    // copy — cleared site data, storage evicted — the fallback is the whole
+    // point of keeping one, so offer it.
+    if (loadState === 'empty' && (!good || state.settings.rescueDismissed)) return;
+    var lost = loadState === 'empty';
 
     var actions = [];
     if (good) {
@@ -4034,12 +5348,15 @@
       });
     }
     actions.push({
-      label: 'Start fresh',
+      label: lost ? 'Start fresh instead' : 'Start fresh',
       cls: good ? '' : 'primary',
       fn: function () {
         state = defaults();
+        // Answered, so stop asking on every open — but never destroy the copy
+        // over a single tap. It stays under More for as long as it is there.
+        if (lost) state.settings.rescueDismissed = true;
         loadState = 'empty'; save(); render();
-        toast('Started fresh');
+        toast(lost ? 'Started fresh — the old copy is still under More' : 'Started fresh');
       }
     });
     actions.push({
@@ -4048,9 +5365,13 @@
     });
 
     confirmSheet({
-      title: 'Your saved data could not be read',
-      body: 'Something went wrong with the copy stored on this device. ' +
-        '<strong>Nothing has been deleted</strong> — it is still there, just unreadable.' +
+      title: lost ? 'Your bills are missing from this device'
+                  : 'Your saved data could not be read',
+      body: (lost
+        ? 'This device has no saved data any more — site data cleared, storage ' +
+          'reclaimed by the browser, or a different browser than the one you set it up in. '
+        : 'Something went wrong with the copy stored on this device. ' +
+          '<strong>Nothing has been deleted</strong> — it is still there, just unreadable.') +
         (good
           ? '<br><br>There is a clean copy from the last time the app opened properly.'
           : '<br><br>There is no fallback copy, so a setup code is the quickest way back.'),
@@ -4131,6 +5452,21 @@
       'Advanced, which puts every running total, breakdown and chart back. Nothing is ever ' +
       'taken away, only folded.</p></div>';
 
+    if (isHourly()) {
+      html += '<div class="card tight"><div class="card-title">Paid by the hour</div>' +
+        '<p class="small">Tap <strong>＋ Hours</strong> and type how many. That is it. ' +
+        'The app prices them at your rate, puts anything past ' +
+        plural(inc().otAfter || 40, 'hour') + ' in a week at overtime, and works out what ' +
+        'should actually land on payday.</p>' +
+        '<p class="small mt">Your bills are paid out of <strong>after-tax</strong> money, so ' +
+        'that is what the daily figure counts. The big green number is what a day of work ' +
+        'really left you, not what it says on the timesheet.</p>' +
+        '<p class="small dim mt">The tax is estimated from the 2026 federal tables and a rate ' +
+        'for your state. It cannot know your W-4 or your health plan. ' +
+        '<strong>More → How you get paid</strong> takes one real payslip — gross and what ' +
+        'landed — and uses your own withholding from then on. That is the accurate one.</p></div>';
+    }
+
     html += '<div class="card tight"><div class="card-title">Logging is two taps</div>' +
       '<p class="small">Tap <strong>＋ Job</strong>, type what it paid, tap <strong>Log it</strong>. ' +
       'That is the whole thing. Service, who paid, the customer and the date all sit under ' +
@@ -4168,7 +5504,19 @@
           'more and it goes down. It always adds up to the same bills.</p>') +
       '<p class="small dim mt">"Days to spare" is your cushion: how many days you could ' +
       'skip and still pay on time. Use it all up and the bills still get paid — the ' +
-      'daily figure just climbs to catch up.</p></div>';
+      'daily figure just climbs to catch up.</p>' +
+      '<p class="small mt">It does not stop once a bill is covered. The day after a bill ' +
+      'is due, it starts saving for the <strong>next</strong> one — so the plan keeps ' +
+      'running instead of going quiet, and a month you have not reached yet is priced ' +
+      'properly rather than looking free.</p></div>';
+
+    html += '<div class="card tight"><div class="card-title">"This bill has come due"</div>' +
+      '<p class="small">The app cannot see your bank, so on the day a bill lands it asks ' +
+      'you. Tap <strong>✓ Paid</strong> and the money leaves your bill money and the next ' +
+      'round starts saving.</p>' +
+      '<p class="small dim mt">Until you do, it keeps holding that money for the bill in ' +
+      'front of it — which is right, but it means the daily amount sits lower than the plan ' +
+      'expects. That is the one thing the app needs from you to stay accurate.</p></div>';
 
     if (hasCut || hasTax) {
       html += '<div class="card tight"><div class="card-title">Money that is not yours</div>' +
@@ -4187,6 +5535,42 @@
         '</div>';
     }
 
+    html += '<div class="card tight"><div class="card-title">When the app is wrong</div>' +
+      '<p class="small">Money gets spent, a day goes unlogged, a transfer lands late. When ' +
+      'what the app thinks you have set aside is not what is really there, tap ' +
+      '<strong>Set the real amount</strong> on the Bills tab and put in the true figure.</p>' +
+      '<p class="small dim mt">Put in more and it goes onto your bills nearest due date first, ' +
+      'so the daily amount drops. Put in less and it comes off the bills with the most time ' +
+      'left — the ones due soonest keep their money, and the daily amount climbs to make it ' +
+      'back. Either way it can be undone.</p></div>';
+
+    html += '<div class="card tight"><div class="card-title">When a bill is paid</div>' +
+      '<p class="small">Tap <strong>✓ Mark paid</strong> under the bill on the Bills tab. ' +
+      'The money you had put by for it comes out of your bill money, and the app tells you ' +
+      'the balance before and after.</p>' +
+      '<p class="small dim mt">A bill that repeats then starts saving for the next one straight ' +
+      'away, so what is still to find goes back up — that is next month\'s, not a mistake. ' +
+      'The confirm says by how much before you tap. A one-off is filed away and stops asking.</p>' +
+      '<p class="small mt">Both the confirm and the message afterwards tell you ' +
+      '<strong>what is left to pay this month</strong>, and a bill you have marked paid drops ' +
+      'straight out of it. The same figure sits on the Bills tab under the totals and on the ' +
+      'Plan tab under the calendar, as <strong>Left to pay in ' +
+      MON_LONG[fromISO(todayISO()).getMonth()] + '</strong>.</p></div>';
+
+    html += '<div class="card tight"><div class="card-title">Reading the month</div>' +
+      '<p class="small">Under the calendar on the Plan tab, three lines follow on from each ' +
+      'other. <strong>Left to pay in ' + MON_LONG[fromISO(todayISO()).getMonth()] + '</strong> ' +
+      'is what the bills landing this month still want — a bill you have marked paid is gone ' +
+      'from it. The line under it splits that in two: how much of it is ' +
+      '<strong>already set aside</strong>, and what is <strong>still to find</strong>. ' +
+      'Those two always add back to the first.</p>' +
+      '<p class="small mt"><strong>In your bill money now</strong> is the whole pot, this ' +
+      'month\'s bills and later ones together. It is the same figure as the one at the top of ' +
+      'the Bills tab — if they ever differ, one of them is wrong.</p>' +
+      '<p class="small dim mt">The <strong>Still to find</strong> figure in the stats above the ' +
+      'calendar counts every bill you track, not just this month\'s, which is why it is the ' +
+      'bigger number. Tap its <strong>?</strong> to see it bill by bill.</p></div>';
+
     html += '<div class="card tight"><div class="card-title">Free and clear</div>' +
       '<p class="small">The last card on the day is money <strong>no bill has a claim on</strong>. ' +
       'It takes everything the work has made you, subtracts what has gone to bills and what ' +
@@ -4196,8 +5580,15 @@
       'already spent.</p></div>';
 
     html += '<div class="card tight"><div class="card-title">If anything ever goes missing</div>' +
-      '<p class="small"><strong>More → Copy my setup code</strong>. Keep it in Notes. ' +
-      'Pasting it back rebuilds every bill in one go.</p></div>';
+      '<p class="small">The app keeps <strong>dated copies of itself on this phone</strong>, ' +
+      'saved as you go. A bad edit, a bad day, a bill deleted by mistake — ' +
+      '<strong>More → On this device</strong> lists them and puts any one back.</p>' +
+      '<p class="small mt">Those copies cannot save you from one thing: the browser ' +
+      'throwing the whole site away. Nothing stored on the phone can, because it goes ' +
+      'too. That is what <strong>💾 Back up now</strong> is for — one tap hands a file to ' +
+      'the share sheet and you keep it in Files, iCloud or Notes, off the phone.</p>' +
+      '<p class="small dim mt">The app asks you to do that every week or so, and says how ' +
+      'long it has been. It is the only step it cannot do for you.</p></div>';
 
     html += '<button class="btn ghost" data-act="close-sheet">Got it</button>';
     openSheet(html);
@@ -4255,22 +5646,45 @@
       case 'edit-bill': if (b) billSheet(b); break;
       case 'delete-bill': if (b) { closeSheet(); deleteBill(b); } break;
 
-      case 'mark-paid':
+      case 'mark-paid': {
         if (!b) break;
         var st = statusOf(b);
         closeSheet();
+        // Say exactly what moves. Paying a recurring bill both empties its
+        // share of the pot and arms the next one, and being surprised by the
+        // second half is how "I paid it and now I owe more" happens.
+        var potNow = vaultTotal();
+        var spend = round2(Math.min(st.saved, b.amount));
+        var over = round2(Math.max(0, st.saved - b.amount));
+        var again = b.recurrence === 'once' ? null : advanceDue(b);
+        var lines = ['<strong>' + money(spend) + '</strong> comes out of your bill money' +
+          (st.remaining > 0.004
+            ? ', and the last ' + money(st.remaining) + ' you pay from your own pocket.'
+            : '.')];
+        lines.push('Bill money goes from ' + money(potNow) + ' to ' +
+          money(round2(potNow - spend)) + '.');
+        lines.push(again
+          ? 'The next ' + esc(b.name) + ' is due ' + fmtDate(again) + ', so it starts saving ' +
+            'from today' + (over > 0.004 ? ' with ' + money(over) + ' carried over' : '') +
+            ' — expect "still to find" to go up by about ' + money(round2(b.amount - over)) + '.'
+          : 'This one does not repeat, so it moves into your history and stops asking.');
+        var restNext = previewAfterPaid(b);
+        lines.push(restNext.billsLeft.length
+          ? 'That leaves <strong>' + money(restNext.leftToPay) + '</strong> to pay in ' +
+            MON_LONG[fromISO(restNext.end).getMonth()] + ', across ' +
+            plural(restNext.billsLeft.length, 'bill') + ' still to land' +
+            (restNext.leftToFind > 0.004
+              ? ' — ' + money(restNext.leftToFind) + ' of it still to find.'
+              : ', and it is all set aside already.')
+          : 'That is every bill this month paid — nothing else lands before ' +
+            MON_LONG[fromISO(restNext.end).getMonth()] + ' is out.');
         confirmSheet({
           title: 'Mark ' + esc(b.name) + ' as paid?',
-          body: st.remaining > 0.004
-            ? 'You\'ve banked <strong>' + money(st.saved) + '</strong> of ' + money(b.amount) +
-              ' — you\'re ' + money(st.remaining) + ' short. Marking it paid starts the next cycle from zero.'
-            : 'You\'ve banked <strong>' + money(st.saved) + '</strong>. That money gets used, and ' +
-              (b.recurrence === 'once' ? 'the bill is archived.' :
-               'the next one (' + fmtDate(advanceDue(b)) + ') starts fresh' +
-               (st.saved > b.amount ? ' with ' + money(st.saved - b.amount) + ' rolled over.' : '.')),
+          body: lines.join('<br><br>'),
           actions: [{ label: 'Yes, it\'s paid', cls: 'primary', fn: function () { markPaid(b); } }]
         });
         break;
+      }
 
       case 'add-money':
         if (!b) break;
@@ -4301,6 +5715,8 @@
         break;
 
       case 'explain': explainSheet(t.dataset.key); break;
+
+      case 'set-balance': closeSheet(); balanceSheet(); break;
 
       case 'go-business': view = 'business'; render(); window.scrollTo({ top: 0 }); break;
 
@@ -4477,6 +5893,13 @@
       case 'goto-bills': view = 'bills'; render(); window.scrollTo({ top: 0 }); break;
 
       case 'add-job': jobSheet(null, t.dataset.date || null); break;
+      case 'add-hours': shiftSheet(null, t.dataset.date || null); break;
+      case 'pay-setup': paySheet(); break;
+      case 'edit-shift': {
+        var sh = (state.shifts || []).filter(function (x) { return x.id === t.dataset.id; })[0];
+        if (sh) shiftSheet(sh, null);
+        break;
+      }
       case 'edit-job': {
         var jb = null;
         state.jobs.forEach(function (x) { if (x.id === id) jb = x; });
@@ -4560,6 +5983,40 @@
 
       case 'export': exportData(); break;
       case 'copy-backup': copyBackup(); break;
+
+      case 'force-update': forceUpdate(); break;
+
+      case 'share-backup': shareBackup(); break;
+
+      case 'snooze-backup':
+        state.settings.backupNagDay = todayISO(); save(); render(); break;
+
+      case 'restore-copy':
+      case 'restore-lastgood': {
+        var g = null;
+        if (t.dataset.key) {
+          var pick = recoveryCopies().filter(function (c) { return c.key === t.dataset.key; })[0];
+          if (pick) g = { raw: pick.raw, data: pick.data };
+        }
+        if (!g) g = lastGood();
+        if (!g) { toast('No copy to restore from'); break; }
+        confirmSheet({
+          title: 'Put back ' + plural(g.data.bills.length, 'bill') + '?',
+          body: 'This replaces what is on the device now with the copy saved the last ' +
+            'time the app opened with your data in it. Copy a backup first if there is ' +
+            'anything here you want to keep.',
+          actions: [{
+            label: 'Restore that copy', cls: 'primary', fn: function () {
+              try { localStorage.setItem(STORE_KEY, g.raw); } catch (e) {}
+              loadState = 'empty'; load();
+              state.settings.rescueDismissed = false;
+              save(); view = 'bills'; render();
+              toast('✅ Restored ' + plural(state.bills.length, 'bill'));
+            }
+          }]
+        });
+        break;
+      }
       case 'import': importData(); break;
 
       case 'reset':
@@ -4569,6 +6026,11 @@
           actions: [{
             label: 'Erase all data', cls: 'danger', fn: function () {
               localStorage.removeItem(STORE_KEY);
+              // the fallback copies as well, or the app offers it straight back
+              try { localStorage.removeItem(BACKUP_KEY); } catch (e) {}
+              snapKeys().forEach(function (k) {
+                try { localStorage.removeItem(k); } catch (e2) {}
+              });
               state = defaults(); save(); view = 'today'; render();
               toast('Everything erased');
             }

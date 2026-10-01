@@ -1,6 +1,7 @@
 /* Bill Cushion service worker — offline shell, network-first so updates land fast. */
 const PREFIX = 'billcushion-';
-const CACHE = PREFIX + 'v1';
+const VERSION = '2026.09.24a';
+const CACHE = PREFIX + VERSION;
 const SHELL = [
   './',
   './index.html',
@@ -14,7 +15,9 @@ const SHELL = [
 self.addEventListener('install', e => {
   e.waitUntil(
     caches.open(CACHE)
-      .then(c => c.addAll(SHELL))
+      // 'reload' so installing a new version cannot pick the old files back
+      // up out of the browser's HTTP cache.
+      .then(c => c.addAll(SHELL.map(u => new Request(u, { cache: 'reload' }))))
       .catch(() => {})
       .then(() => self.skipWaiting())
   );
@@ -36,7 +39,7 @@ self.addEventListener('fetch', e => {
   if (e.request.method !== 'GET') return;
   if (new URL(e.request.url).origin !== self.location.origin) return;
   e.respondWith(
-    fetch(e.request)
+    fetch(e.request, { cache: 'no-cache' })
       .then(res => {
         const copy = res.clone();
         caches.open(CACHE).then(c => c.put(e.request, copy)).catch(() => {});

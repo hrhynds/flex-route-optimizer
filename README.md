@@ -163,13 +163,187 @@ the cushion is *how early to be ready*, and money set aside is money set aside.
   put it right: add a job or a cost, switch the whole day's partner share, correct a
   set-aside amount rather than deleting it, add more, or reopen it.
 
-The month summary leads with **Bills due in <month>** — every bill landing in the month
-you're looking at, whatever rhythm it keeps, added up. A weekly bill counts each time it
+The month summary is three lines that follow on from each other, so the month reads as one
+sum rather than three competing ones:
+
+```
+Left to pay in September                                   $650.00
+  $600.00 of that is already set aside, so $50.00 is still to find
+In your bill money now                                     $720.00
+```
+
+**Left to pay in \<month\>** is every bill landing in the month you're looking at, whatever
+rhythm it keeps, minus the ones already marked paid. A weekly bill counts each time it
 lands, a monthly one follows its anchor day into months its current cycle hasn't reached
 yet, and cycles already paid come from the record. Tap the **?** for the itemised list.
-It sits above *still to set aside* and *already set aside*, which answer a different
-question: those cover the days shown on that calendar, and a bill's funding window can
-run past the end of a month.
+The line beneath splits that figure in two — what you are already holding for those bills,
+and what is still to find — and the two always add back to it.
+
+**In your bill money now** is the whole pot, this month's bills and later ones together. It
+is deliberately the same number as the one at the top of the Bills tab: the same words have
+to mean the same figure on every tab, or the app is lying somewhere.
+
+Its sub-line carries one more figure — *the days left in \<month\> ask for $X more* — and that
+is a third thing again: what the daily amounts on the calendar above add up to over the days
+you have left. It is read straight off the same cells the calendar draws, so the row and the
+calendar can't disagree, and its **?** spells out which figure is which.
+
+### The plan doesn't stop at the round it's funding now
+
+Each bill is saved for one round at a time, and the day after a bill is due it starts saving
+for the next one. Without that, the plan went silent the moment the current round was
+covered — so a month whose bills hadn't come round yet looked free. October could say it
+cost $1,787 above a calendar asking for $25.
+
+```
+October 2026     calendar $1,727.97   month costs $1,822.18   ratio 0.95
+November 2026    calendar $1,711.78   month costs $1,653.12   ratio 1.04
+December 2026    calendar $1,721.25   month costs $1,653.12   ratio 1.04
+```
+
+A full month ahead now asks for what that month actually costs. They don't tie out to the
+penny and shouldn't: a bill landing near the 1st was part-funded the month before, and one
+landing near the 31st is still being funded into the next.
+
+The current month is the exception — its calendar only counts days from today forward, while
+its cost includes bills already past due. A one-off never re-arms; it's funded once and filed
+away.
+
+**Today is never projected forward.** Whether the bill sitting on today's due date has
+actually been handed over is something only you know, so today's figure stays on the rounds
+that exist in your data. Money can only be filed against a real round, which is also why
+`allocate` refuses a projected one outright.
+
+### "This bill has come due"
+
+The projection assumes a bill gets paid on its due date. That assumption is only worth
+anything if the app tells you when it's waiting on you, so Today carries a card listing every
+bill whose date has passed without being marked paid — how late it is, what's being held for
+it, and a **✓ Paid** button.
+
+Tap it and the money leaves the pot, the next round starts saving, and the daily amount picks
+it up. Leave it and the app keeps holding that money for the bill in front of it, which is
+correct but means the daily figure sits lower than the plan expects. It's the one thing the
+app needs from you that it can't work out on its own.
+
+Earlier versions put *already set aside this month* here as a running total of everything
+paid in during the month. That broke the moment you marked a bill paid: the money left the
+pot but not the total, so the Bills tab said $220 and the Plan tab said $720, both calling
+it "set aside". The chain above can't drift that way — every line is derived from the same
+bills and the same pot, at the moment you look at it.
+
+A bill whose due date has gone by without being marked paid still counts as this month's.
+The window runs from the first of the month, not from today, because an overdue bill is
+very much still something you have to pay.
+
+The **Still to find** stat above the calendar is a different figure on purpose: it counts
+every bill you track, in any month, which is why it's larger. Tap its **?** and it lists
+each bill with what it still needs — and explains why paying a bill makes it go *up*.
+
+### Two ways to be paid
+
+**Per job** is the default: you log what each job brought in, gross, and set your own tax
+aside. **By the hour** is for a wage, and it answers a different question — you don't get
+money daily, you get a paycheck, and the employer has already taken its cut.
+
+Set it up under **More → How you get paid**: hourly rate, state, filing status, how often you
+are paid, and a recent payday to count the others from. Then `＋ Hours` replaces `＋ Job` and
+you type how many hours you worked.
+
+- **Overtime** is priced where the hour falls in the week, not where it falls in the day. The
+  ninth hour of a 48-hour week is overtime; the same hour in a 30-hour week is not.
+- **Pay periods** run weekly, fortnightly, twice-monthly or monthly, anchored on a real payday
+  so they line up with your actual calendar. `lag` is the gap between the end of a work period
+  and the day it pays, default 5 days.
+- **Bills are funded out of after-tax money**, because that is what reaches the bank. The
+  hero number is what a day of work actually left you.
+
+#### The tax estimate, and how to stop it being an estimate
+
+Withholding is computed from the 2026 federal brackets (Rev. Proc. 2025-32), the standard
+deduction for your filing status, Social Security at 6.2% to the $184,500 wage base, Medicare
+at 1.45% plus the 0.9% surcharge over $200,000, and a per-state rate. Pre-tax deductions come
+off before everything; post-tax after.
+
+The state rates are a single figure per state chosen for what a wage actually lands in, not
+the headline top rate, and they are labelled on screen as an estimate. They cannot know your
+W-4, your health plan or a city tax.
+
+So the app takes **one real payslip** — gross, and what landed — and uses that ratio from then
+on, ignoring the tables entirely. That is the accurate path, and the card says which one it is
+using. `test-taxmath.js` lifts the engine straight out of the shipped file and checks it
+against sums worked out by hand from the published tables.
+
+### Backups
+
+Everything lives in `localStorage` on one device, so losing it is a real failure mode rather
+than a hypothetical. There are two layers, and they protect against different things.
+
+**Dated copies, kept automatically.** Every save writes a snapshot under
+`billcushion.snap.<date>` (throttled to one every two minutes), and the six most recent days
+are kept. An empty state never writes one, so opening a blank app can't push a real copy out.
+**More → On this device** lists them with their bill and job counts and restores any one.
+`billcushion.lastgood` — the state as of the last clean open — sits alongside them.
+
+These undo a bad edit, a bad day, or a bill deleted by mistake. They cannot survive the
+browser discarding the origin, because they go with it.
+
+**A copy off the phone, which is the one that matters.** iOS won't let a page write a file
+unprompted, so this is one tap: **💾 Back up now** hands a real `File` to `navigator.share`,
+and it lands in Files, iCloud or Notes. Where the share sheet isn't available it falls back to
+a download, then to copying the JSON.
+
+The app tracks when a copy last left the device and puts a banner on Today after seven days —
+harder after twenty-one, and from the start if there has never been one. *Later* snoozes it
+for the day only; there's no dismissing it for good. A cancelled share sheet is not recorded
+as a backup.
+
+**Erase everything** clears the snapshots and the fallback along with the live copy. Without
+that, erasing was undone by the next open offering it all back.
+
+### When the ledger and the bank disagree
+
+Money gets spent, a day goes unlogged, a transfer lands late. **Set the real amount** on
+the Bills tab takes the true figure and squares the app up to it rather than carrying on
+with a number you know is wrong.
+
+More than the app has goes onto the bills nearest due first, so the daily amount drops.
+Less comes back off the bills with the *most* time left — the ones due soonest keep their
+funding, and the daily figure climbs to make it back. The sheet says which way it will go
+before you commit, and the change can be undone.
+
+The pot itself is what you are holding right now: money spent on a bill you marked paid
+stops counting, which is why it falls each time you pay one.
+
+### Marking a bill paid
+
+Every bill on the Bills tab carries **✓ Mark paid** and **＋ Add money** under it — the
+thing you come here to do on the day a bill lands should not be three taps down inside a
+sheet. The confirm spells out what moves before you commit:
+
+```
+$300.00 comes out of your bill money.
+Bill money goes from $340.00 to $40.00.
+The next Rent is due Oct 1, so it starts saving from today
+ — expect "still to find" to go up by about $300.00.
+```
+
+Then it answers the question you were about to ask anyway — **what is left to pay this
+month**. A bill you have marked paid drops out of that figure, which is the whole point
+of marking it: the same number appears on the Plan tab under the calendar and on the
+Bills tab under the totals, both headed **Left to pay in \<month\>**, and both fall by
+exactly the bill you just settled. The confirm projects it for after the payment (worked out by applying the
+payment to a copy of your data and reading the result, so "after this" is never a figure
+measured before the change), and the message afterwards repeats the same number. The Bills
+tab carries it permanently under its totals, with a tap-to-see list of the bills still to
+land, what each still needs, and how much of the month is already covered.
+
+That last line matters: a repeating bill re-arms the moment you pay it, so the balance
+still to find goes *up*. It is next month's, not a mistake, and the app says so rather
+than letting you discover it. Paying while short says where the rest comes from; saving
+past the amount carries the extra into the next cycle; a one-off is filed away and stops
+asking. Afterwards the card reads **✓ Paid today · next one Oct 1** instead of looking
+untouched.
 
 ### Free and clear
 
